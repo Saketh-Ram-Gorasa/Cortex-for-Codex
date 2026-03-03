@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────
+#  SecondCortex — Docker Compose
+#
+#  Services:
+#    backend   → FastAPI + Gunicorn (port 8000)
+#    frontend  → Next.js standalone  (port 3000)
+#
+#  Usage:
+#    docker compose up --build          # Build & run both
+#    docker compose up --build -d       # Detached mode
+#    docker compose down                # Stop & remove
+# ─────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── FastAPI Backend ──────────────────────────────────────────
+  backend:
+    build:
+      context: ./secondcortex-backend
+      dockerfile: Dockerfile
+    container_name: sc-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./secondcortex-backend/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Next.js Frontend ────────────────────────────────────────
+  frontend:
+    build:
+      context: ./secondcortex-web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://backend:8000
+    container_name: sc-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

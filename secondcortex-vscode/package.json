@@ -1,0 +1,97 @@
+{
+  "name": "secondcortex",
+  "displayName": "SecondCortex",
+  "description": "Your AI-Powered Second Brain for Development Context — tracks IDE activity, enforces a Semantic Firewall, and enables Workspace Resurrection.",
+  "version": "0.1.0",
+  "publisher": "secondcortex-labs",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "secondcortex-sidebar",
+          "title": "SecondCortex",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "secondcortex-sidebar": [
+        {
+          "type": "webview",
+          "id": "secondcortex.chatView",
+          "name": "SecondCortex Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "secondcortex.resurrectWorkspace",
+        "title": "SecondCortex: Resurrect Workspace"
+      },
+      {
+        "command": "secondcortex.askQuestion",
+        "title": "SecondCortex: Ask a Question"
+      },
+      {
+        "command": "secondcortex.toggleCapture",
+        "title": "SecondCortex: Toggle Context Capture"
+      }
+    ],
+    "configuration": {
+      "title": "SecondCortex",
+      "properties": {
+        "secondcortex.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "The URL of the SecondCortex Azure backend API."
+        },
+        "secondcortex.debouncerDelayMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Milliseconds of active editing before a context snapshot is captured."
+        },
+        "secondcortex.noiseThresholdMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "Milliseconds — if a file is closed before this threshold, it is ignored as noise."
+        },
+        "secondcortex.captureEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable automatic context capture."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.0",
+    "@vscode/test-electron": "^2.3.8"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "minimatch": "^9.0.0",
+    "node-fetch": "^3.3.0"
+  }
+}

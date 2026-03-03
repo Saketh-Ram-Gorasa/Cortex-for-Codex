@@ -1,0 +1,23 @@
+[project]
+name = "secondcortex-backend"
+version = "0.1.0"
+description = "SecondCortex Azure Backend — Multi-Agent Orchestrator with FastAPI"
+requires-python = ">=3.11"
+
+[project.dependencies]
+fastapi = ">=0.109.0"
+uvicorn = {version = ">=0.27.0", extras = ["standard"]}
+openai = ">=1.12.0"
+azure-search-documents = ">=11.4.0"
+azure-identity = ">=1.15.0"
+pydantic = ">=2.5.0"
+pydantic-settings = ">=2.1.0"
+python-dotenv = ">=1.0.0"
+httpx = ">=0.27.0"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.2.0",
+]

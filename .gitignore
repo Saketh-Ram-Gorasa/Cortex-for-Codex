@@ -1,0 +1,59 @@
+# SecondCortex - Git Ignore
+
+# ── Environments & Secrets ───────────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.zip
+*.log
+
+# ── Python (Backend) ─────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*,cover
+.hypothesis/
+.pytest_cache/
+
+# ── Node.js (Frontend / VS Code Extension) ───────────────────
+node_modules/
+/secondcortex-web/.next/
+/secondcortex-web/out/
+/secondcortex-web/build/
+dist/
+.npm
+.eslintcache
+
+# ── VS Code / IDE ───────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/
+*.vsix
+
+# ── Deployment & Docker ─────────────────────────────────────
+.dockerignore
+azure-logs/
+backend_deploy.zip*
+backend_v2.zip*
+
+# ── Agent System ────────────────────────────────────────────
+.agent/
+.agents/
+skills-lock.json
