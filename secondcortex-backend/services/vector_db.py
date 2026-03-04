@@ -2,6 +2,8 @@
 Vector Database Service — handles connections to:
   1. LLM (GitHub Models or Azure OpenAI) for embeddings
   2. ChromaDB (vector storage & semantic search)
+
+Supports per-user namespaced collections for multi-tenant isolation.
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ import logging
 from typing import Any
 
 import chromadb
-from chromadb.config import Settings
 
 from config import settings
 from services.llm_client import create_llm_client, get_embedding_model
@@ -19,21 +20,36 @@ logger = logging.getLogger("secondcortex.vectordb")
 
 
 class VectorDBService:
-    """Manages LLM embeddings and ChromaDB operations."""
+    """Manages LLM embeddings and ChromaDB operations with per-user isolation."""
 
     def __init__(self) -> None:
         self.openai_client = create_llm_client()
 
-        # Initialize ChromaDB client (persistent)
+        # Initialize ChromaDB client with configurable persistent path
         try:
-            self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            self.collection = self.chroma_client.get_or_create_collection(
-                name="secondcortex-snapshots"
-            )
-            logger.info("ChromaDB initialized.")
+            db_path = settings.chroma_db_path
+            self.chroma_client = chromadb.PersistentClient(path=db_path)
+            logger.info("ChromaDB initialized at: %s", db_path)
         except Exception as exc:
             logger.error("ChromaDB initialization failed: %s", exc)
-            self.collection = None
+            self.chroma_client = None
+
+    # ── Per-User Collection ────────────────────────────────────
+
+    def _get_collection(self, user_id: str | None = None):
+        """Get or create a ChromaDB collection namespaced to the user."""
+        if self.chroma_client is None:
+            return None
+
+        collection_name = f"snapshots-{user_id}" if user_id else "secondcortex-snapshots"
+        # ChromaDB collection names must be 3-63 chars, alphanumeric + hyphens
+        collection_name = collection_name[:63]
+
+        try:
+            return self.chroma_client.get_or_create_collection(name=collection_name)
+        except Exception as exc:
+            logger.error("Failed to get/create collection '%s': %s", collection_name, exc)
+            return None
 
     # ── Embeddings ──────────────────────────────────────────────
 
@@ -51,9 +67,10 @@ class VectorDBService:
 
     # ── Vector DB Operations ────────────────────────────────────
 
-    async def upsert_snapshot(self, snapshot: Any) -> None:
-        """Store a snapshot document (with embedding) in ChromaDB."""
-        if self.collection is None:
+    async def upsert_snapshot(self, snapshot: Any, user_id: str | None = None) -> None:
+        """Store a snapshot document (with embedding) in ChromaDB, scoped to the user."""
+        collection = self._get_collection(user_id)
+        if collection is None:
             logger.warning("Chroma collection not available — skipping upsert.")
             return
 
@@ -71,19 +88,20 @@ class VectorDBService:
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
             }
 
-            self.collection.add(
+            collection.add(
                 ids=[str(snapshot.id)],
                 embeddings=[snapshot.embedding or []],
                 metadatas=[metadata],
                 documents=[str(snapshot.shadow_graph or "")]
             )
-            logger.info("Upserted snapshot %s to ChromaDB.", snapshot.id)
+            logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
         except Exception as exc:
             logger.error("Upsert to ChromaDB failed: %s", exc)
 
-    async def semantic_search(self, query: str, top_k: int = 5) -> list[dict]:
-        """Perform a vector semantic search over stored snapshots."""
-        if self.collection is None:
+    async def semantic_search(self, query: str, top_k: int = 5, user_id: str | None = None) -> list[dict]:
+        """Perform a vector semantic search over stored snapshots, scoped to the user."""
+        collection = self._get_collection(user_id)
+        if collection is None:
             logger.warning("Chroma collection not available — returning empty results.")
             return []
 
@@ -95,7 +113,7 @@ class VectorDBService:
                 logger.warning("No query embedding generated.")
                 return []
 
-            results = self.collection.query(
+            results = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=top_k
             )

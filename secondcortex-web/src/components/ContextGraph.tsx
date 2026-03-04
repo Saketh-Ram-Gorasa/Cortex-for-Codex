@@ -81,11 +81,13 @@ const NODE_STYLES: Record<string, React.CSSProperties> = {
 interface ContextGraphProps {
     backendUrl?: string;
     pollIntervalMs?: number;
+    apiKey?: string;
 }
 
 export default function ContextGraph({
     backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
     pollIntervalMs = 3000,
+    apiKey = process.env.NEXT_PUBLIC_API_KEY || '',
 }: ContextGraphProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -278,7 +280,11 @@ export default function ContextGraph({
 
         const poll = async () => {
             try {
-                const res = await fetch(`${backendUrl}/api/v1/events`);
+                const headers: Record<string, string> = {};
+                if (apiKey) {
+                    headers['X-API-Key'] = apiKey;
+                }
+                const res = await fetch(`${backendUrl}/api/v1/events`, { headers });
                 if (res.ok) {
                     setIsConnected(true);
                     const data = await res.json();
@@ -303,7 +309,7 @@ export default function ContextGraph({
             active = false;
             clearInterval(interval);
         };
-    }, [backendUrl, pollIntervalMs, processEvents]);
+    }, [backendUrl, pollIntervalMs, processEvents, apiKey]);
 
     return (
         <div style={{ width: '100%', height: '100vh', background: '#020617' }}>

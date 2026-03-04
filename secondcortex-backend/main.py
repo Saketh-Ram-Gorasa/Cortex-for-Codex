@@ -6,6 +6,7 @@ Endpoints:
                            processes in background via Retriever).
   POST /api/v1/query     — Receives a user question, runs Planner → Executor pipeline.
   POST /api/v1/resurrect — Receives a target branch/snapshot ID, returns resurrection commands.
+  GET  /api/v1/events    — Polls recent snapshots for the Live Graph.
   GET  /health           — Health check.
 """
 
@@ -24,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents.executor import ExecutorAgent
@@ -51,7 +52,7 @@ logger = logging.getLogger("secondcortex.main")
 app = FastAPI(
     title="SecondCortex API",
     description="Multi-Agent Orchestrator for IDE Context Memory",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
@@ -68,36 +69,67 @@ retriever = RetrieverAgent(vector_db)
 planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 
+# ── Auth: Build the API key lookup table ────────────────────────
+API_KEY_MAP = settings.get_api_key_map()
+AUTH_ENABLED = len(API_KEY_MAP) > 0
+
+if AUTH_ENABLED:
+    logger.info("🔐 API key auth ENABLED — %d user(s) configured.", len(API_KEY_MAP))
+else:
+    logger.warning("⚠️  API key auth DISABLED — all requests allowed (set API_KEYS to enable).")
+
+
+# ── Auth dependency ─────────────────────────────────────────────
+
+async def get_current_user(x_api_key: str | None = Header(None)) -> str | None:
+    """
+    If auth is enabled, validates X-API-Key header and returns the user_id.
+    If auth is disabled, returns None (all requests allowed).
+    """
+    if not AUTH_ENABLED:
+        return None
+
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key header.")
+
+    user_id = API_KEY_MAP.get(x_api_key)
+    if user_id is None:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+
+    return user_id
+
 
 # ── Endpoints ───────────────────────────────────────────────────
 
 @app.get("/health")
 async def health_check():
     """Simple health check for load balancers and monitoring."""
-    return {"status": "ok", "service": "secondcortex-backend"}
+    return {"status": "ok", "service": "secondcortex-backend", "auth_enabled": AUTH_ENABLED}
 
 
 @app.post("/api/v1/snapshot", status_code=200)
-async def receive_snapshot(payload: SnapshotPayload, background_tasks: BackgroundTasks):
+async def receive_snapshot(
+    payload: SnapshotPayload,
+    background_tasks: BackgroundTasks,
+    user_id: str | None = Depends(get_current_user),
+):
     """
     Receive a sanitized IDE snapshot from the VS Code extension.
     Returns 200 OK instantly, then processes asynchronously via Retriever.
     """
-    logger.info("Received snapshot for file: %s", payload.active_file)
-    background_tasks.add_task(retriever.process_snapshot, payload)
+    logger.info("Received snapshot for file: %s (user=%s)", payload.active_file, user_id or "anon")
+    background_tasks.add_task(retriever.process_snapshot, payload, user_id)
     return {"status": "accepted", "message": "Snapshot queued for processing."}
 
 
 @app.get("/api/v1/events")
-async def get_events():
+async def get_events(user_id: str | None = Depends(get_current_user)):
     """
     Endpoint for the Next.js React Flow to poll recent snapshots.
-    Fetches the latest context graph events from Azure AI Search.
+    Scoped to the authenticated user's collection.
     """
-    # Fetch top 10 recent events using an empty search string (match all)
-    results = await vector_db.semantic_search("*", top_k=10)
-    
-    # Map the search payload back into the event format expected by the frontend
+    results = await vector_db.semantic_search("*", top_k=10, user_id=user_id)
+
     events = []
     for r in results:
         events.append({
@@ -107,21 +139,24 @@ async def get_events():
             "git_branch": r.get("git_branch"),
             "summary": r.get("summary"),
             "entities": r.get("entities", "").split(",") if r.get("entities") else [],
-            "relations": [] # Graph relations not fully projected in this basic search
+            "relations": []
         })
-        
+
     return {"events": events}
 
 
 @app.post("/api/v1/query", response_model=QueryResponse)
-async def handle_query(request: QueryRequest):
+async def handle_query(
+    request: QueryRequest,
+    user_id: str | None = Depends(get_current_user),
+):
     """
     Handle a user question — runs the Planner → Executor pipeline.
     """
-    logger.info("Query received: %s", request.question)
+    logger.info("Query received: %s (user=%s)", request.question, user_id or "anon")
 
     # Step 1: Plan — break the question into search tasks
-    plan_result = await planner.plan(request.question)
+    plan_result = await planner.plan(request.question, user_id=user_id)
 
     # Step 2: Execute — synthesize and validate
     response = await executor.synthesize(request.question, plan_result)
@@ -131,18 +166,20 @@ async def handle_query(request: QueryRequest):
 
 
 @app.post("/api/v1/resurrect", response_model=ResurrectionResponse)
-async def handle_resurrection(request: ResurrectionRequest):
+async def handle_resurrection(
+    request: ResurrectionRequest,
+    user_id: str | None = Depends(get_current_user),
+):
     """
     Generate a Workspace Resurrection plan for a given target branch/snapshot.
     """
-    logger.info("Resurrection requested for target: %s", request.target)
+    logger.info("Resurrection requested for target: %s (user=%s)", request.target, user_id or "anon")
 
-    # Use the planner to search for context around the target
     plan_result = await planner.plan(
-        f"Find the workspace state for branch or snapshot: {request.target}"
+        f"Find the workspace state for branch or snapshot: {request.target}",
+        user_id=user_id,
     )
 
-    # Use the executor to generate resurrection commands
     response = await executor.synthesize(
         f"Generate workspace resurrection commands for: {request.target}",
         plan_result,

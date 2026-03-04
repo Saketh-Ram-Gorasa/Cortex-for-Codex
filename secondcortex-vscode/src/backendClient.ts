@@ -2,12 +2,25 @@ import * as vscode from 'vscode';
 
 /**
  * BackendClient – HTTP client for communicating with the SecondCortex Azure FastAPI backend.
+ * Sends an X-API-Key header for per-user authentication.
  */
 export class BackendClient {
     constructor(
         private baseUrl: string,
         private output: vscode.OutputChannel
     ) { }
+
+    /** Build common headers including the API key if configured. */
+    private getHeaders(): Record<string, string> {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        };
+        const apiKey = vscode.workspace.getConfiguration('secondcortex').get<string>('apiKey');
+        if (apiKey) {
+            headers['X-API-Key'] = apiKey;
+        }
+        return headers;
+    }
 
     /**
      * Send a sanitized snapshot to the backend.
@@ -17,7 +30,7 @@ export class BackendClient {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/snapshot`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getHeaders(),
                 body: JSON.stringify(payload),
             });
             if (!res.ok) {
@@ -39,7 +52,7 @@ export class BackendClient {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/query`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getHeaders(),
                 body: JSON.stringify({ question }),
             });
             if (!res.ok) {
@@ -60,7 +73,7 @@ export class BackendClient {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/resurrect`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getHeaders(),
                 body: JSON.stringify({ target }),
             });
             if (!res.ok) {

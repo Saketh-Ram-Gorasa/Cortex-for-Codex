@@ -48,7 +48,7 @@ class PlannerAgent:
         self.vector_db = vector_db
         self.client = create_llm_client()
 
-    async def plan(self, question: str) -> PlanResult:
+    async def plan(self, question: str, user_id: str | None = None) -> PlanResult:
         """
         Interpret the user's question and produce a search plan.
         Returns retrieved context chunks from Vector DB.
@@ -66,7 +66,7 @@ class PlannerAgent:
 
         for i, query in enumerate(search_queries):
             logger.info("Search step %d/%d: %s", i + 1, MAX_STEPS, query)
-            results = await self.vector_db.semantic_search(query, top_k=5)
+            results = await self.vector_db.semantic_search(query, top_k=5, user_id=user_id)
             all_results.extend(results)
 
         # Deduplicate by snapshot ID

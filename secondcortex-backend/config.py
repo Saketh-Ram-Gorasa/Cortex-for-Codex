@@ -26,12 +26,33 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-02-01"
     azure_openai_embedding_deployment: str = "text-embedding-ada-002"
 
+    # ── ChromaDB Storage ─────────────────────────────────────
+    # On Azure App Service, set to /home/chroma_db for persistence.
+    # Locally, defaults to ./chroma_db.
+    chroma_db_path: str = "./chroma_db"
+
+    # ── API Authentication ───────────────────────────────────
+    # Comma-separated list of "user_id:api_key" pairs.
+    # Example: "suhaan:sk-abc123,teammate:sk-def456"
+    api_keys: str = ""
 
     # ── Server ───────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    def get_api_key_map(self) -> dict[str, str]:
+        """Parse 'user_id:api_key' pairs into a lookup dict {api_key: user_id}."""
+        key_map: dict[str, str] = {}
+        if not self.api_keys:
+            return key_map
+        for entry in self.api_keys.split(","):
+            entry = entry.strip()
+            if ":" in entry:
+                user_id, api_key = entry.split(":", 1)
+                key_map[api_key.strip()] = user_id.strip()
+        return key_map
 
 
 settings = Settings()

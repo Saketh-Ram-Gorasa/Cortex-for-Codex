@@ -65,13 +65,13 @@ class RetrieverAgent:
         # Initialize LLM client (GitHub Models or Azure OpenAI)
         self.client = create_llm_client()
 
-    async def process_snapshot(self, payload: SnapshotPayload) -> StoredSnapshot:
+    async def process_snapshot(self, payload: SnapshotPayload, user_id: str | None = None) -> StoredSnapshot:
         """
         Main entry point — called from BackgroundTasks.
         1. Route the snapshot (ADD/UPDATE/DELETE/NOOP).
         2. If ADD or UPDATE → extract metadata → generate embedding → store.
         """
-        logger.info("Processing snapshot for %s", payload.active_file)
+        logger.info("Processing snapshot for %s (user=%s)", payload.active_file, user_id or "default")
 
         # ── Step 1: Route the memory operation ──────────────────
         metadata = await self._route_operation(payload)
@@ -96,7 +96,7 @@ class RetrieverAgent:
                 f"{metadata.summary}\n{payload.shadow_graph[:2000]}"
             )
             stored.embedding = embedding
-            await self.vector_db.upsert_snapshot(stored)
+            await self.vector_db.upsert_snapshot(stored, user_id=user_id)
             logger.info("Stored snapshot %s in Vector DB.", stored.id)
         elif metadata.operation == MemoryOperation.DELETE:
             logger.info("Snapshot marked as rabbit hole — not storing.")
