@@ -57,3 +57,7 @@ backend_v2.zip*
 .agent/
 .agents/
 skills-lock.json
+
+# ── Docs (Local Only) ───────────────────────────────────────
+docs/
+
