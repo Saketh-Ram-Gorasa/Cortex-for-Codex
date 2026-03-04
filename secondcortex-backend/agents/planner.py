@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
+from config import settings
 from services.vector_db import VectorDBService
 from services.llm_client import create_llm_client, get_chat_model
 
