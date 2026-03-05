@@ -28,6 +28,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             localResourceRoots: [this.extensionUri],
         };
 
+        // Enable context retention so chat doesn't vanish when switching tabs
+        // Note: For WebviewView, we handle this by ensuring the view is resolved and messages are re-sent if needed
+        // but 'retainContextWhenHidden' is specifically for WebviewPanels. 
+        // For Sidebar, we will load history from the backend on every resolve.
+
         this.updateHtml();
 
         // Handle messages from the webview
@@ -87,6 +92,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     const loggedIn = await this.auth.isLoggedIn();
                     const user = await this.auth.getUser();
                     this.postMessage({ type: 'authStatus', loggedIn, user });
+                    break;
+                }
+                case 'getHistory': {
+                    const history = await this.backend.getChatHistory();
+                    this.postMessage({ type: 'history', messages: history });
+                    break;
+                }
+                case 'newChat': {
+                    await this.backend.clearChatHistory();
+                    this.postMessage({ type: 'chatCleared' });
                     break;
                 }
             }
@@ -321,121 +336,239 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SecondCortex</title>
     <style>
+        :root {
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.4);
+            --bg: #020617;
+            --surface: #0f172a;
+            --border: rgba(255, 255, 255, 0.08);
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        
         body {
-            font-family: var(--vscode-font-family);
-            color: var(--vscode-foreground);
-            background: var(--vscode-sideBar-background);
-            padding: 12px;
+            font-family: 'Inter', var(--vscode-font-family), system-ui;
+            color: var(--text-main);
+            background: var(--bg);
+            padding: 0;
             display: flex;
             flex-direction: column;
             height: 100vh;
+            overflow: hidden;
+            background-image: 
+                radial-gradient(circle at top right, rgba(99, 102, 241, 0.05), transparent 400px),
+                radial-gradient(circle at bottom left, rgba(244, 114, 182, 0.03), transparent 300px);
         }
+
+        /* ── Header ────────────────────────────────────────── */
         .header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 12px;
+            padding: 16px;
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            z-index: 10;
         }
         .header h2 {
-            font-size: 14px;
-            font-weight: 600;
+            font-size: 15px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.01em;
         }
-        .header .user-info {
-            font-size: 11px;
-            opacity: 0.6;
+        .header-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
         }
-        .logout-btn {
+        .user-info {
             font-size: 11px;
-            background: transparent;
-            border: 1px solid var(--vscode-panel-border);
-            color: var(--vscode-foreground);
-            padding: 3px 8px;
-            border-radius: 3px;
+            color: var(--text-dim);
+            font-weight: 500;
+        }
+
+        /* ── Action Buttons ────────────────────────────────── */
+        .icon-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 6px 10px;
+            border-radius: 6px;
             cursor: pointer;
-            opacity: 0.7;
-            transition: opacity 0.2s;
+            font-size: 11px;
+            font-weight: 600;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
-        .logout-btn:hover { opacity: 1; }
+        .icon-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-1px);
+        }
+        .icon-btn.primary {
+            background: rgba(99, 102, 241, 0.1);
+            border-color: rgba(99, 102, 241, 0.2);
+            color: #818cf8;
+        }
+        .icon-btn.primary:hover {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 0 16px var(--accent-glow);
+        }
+
+        /* ── Chat Log ──────────────────────────────────────── */
         #chat-log {
             flex: 1;
             overflow-y: auto;
-            margin-bottom: 12px;
+            padding: 20px 16px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 16px;
+            scroll-behavior: smooth;
         }
+        #chat-log::-webkit-scrollbar { width: 4px; }
+        #chat-log::-webkit-scrollbar-track { background: transparent; }
+        #chat-log::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+
+        .msg-wrapper {
+            display: flex;
+            flex-direction: column;
+            max-width: 90%;
+            animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .msg-wrapper.user { align-self: flex-end; }
+        .msg-wrapper.assistant { align-self: flex-start; }
+
         .msg {
-            padding: 8px 10px;
-            border-radius: 6px;
+            padding: 12px 14px;
+            border-radius: 12px;
             font-size: 13px;
-            line-height: 1.4;
+            line-height: 1.5;
             word-wrap: break-word;
+            position: relative;
         }
-        .msg.user {
-            background: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
-            align-self: flex-end;
-            max-width: 85%;
+        .user .msg {
+            background: var(--accent);
+            color: #fff;
+            border-bottom-right-radius: 2px;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
         }
-        .msg.assistant {
-            background: var(--vscode-editor-background);
-            border: 1px solid var(--vscode-panel-border);
-            align-self: flex-start;
-            max-width: 85%;
-        }
-        .msg.error {
-            background: var(--vscode-inputValidation-errorBackground);
-            border: 1px solid var(--vscode-inputValidation-errorBorder);
-            color: var(--vscode-inputValidation-errorForeground);
+        .assistant .msg {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-bottom-left-radius: 2px;
         }
         .msg.loading {
             opacity: 0.6;
             font-style: italic;
+            background: transparent;
+            border: none;
+            padding-left: 0;
         }
-        #input-area {
+        .msg.error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        .meta {
+            font-size: 9px;
+            color: var(--text-dim);
+            margin-top: 4px;
+            font-weight: 500;
+        }
+        .user .meta { text-align: right; }
+
+        /* ── Input Area ────────────────────────────────────── */
+        .footer {
+            padding: 16px;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            border-top: 1px solid var(--border);
+        }
+        .input-container {
+            position: relative;
             display: flex;
-            gap: 6px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 4px;
+            transition: all 0.2s;
+        }
+        .input-container:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
         }
         #question-input {
             flex: 1;
-            padding: 8px;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            padding: 8px 12px;
             font-size: 13px;
-            border: 1px solid var(--vscode-input-border);
-            background: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 4px;
             outline: none;
-        }
-        #question-input:focus {
-            border-color: var(--vscode-focusBorder);
+            font-family: inherit;
         }
         #send-btn {
-            padding: 8px 14px;
-            font-size: 13px;
-            background: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
+            background: var(--accent);
+            color: #fff;
             border: none;
-            border-radius: 4px;
+            border-radius: 7px;
+            padding: 0 14px;
+            font-size: 13px;
+            font-weight: 600;
             cursor: pointer;
+            transition: all 0.2s;
         }
         #send-btn:hover {
-            background: var(--vscode-button-hoverBackground);
+            transform: scale(1.02);
+            filter: brightness(1.1);
+        }
+        #send-btn:active { transform: scale(0.98); }
+
+        /* ── Typography Highlighting ───────────────────────── */
+        code {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9em;
         }
     </style>
 </head>
 <body>
     <div class="header">
         <h2>🧠 SecondCortex</h2>
-        <div>
-            <span class="user-info">${displayName}</span>
-            <button class="logout-btn" onclick="doLogout()">Logout</button>
+        <div class="header-actions">
+            <button class="icon-btn primary" onclick="startNewChat()">+ New Chat</button>
+            <button class="icon-btn" onclick="doLogout()">Logout</button>
         </div>
     </div>
+    
     <div id="chat-log"></div>
-    <div id="input-area">
-        <input id="question-input" type="text" placeholder="Ask about your project history..." />
-        <button id="send-btn">Ask</button>
+    
+    <div class="footer">
+        <div class="input-container">
+            <input id="question-input" type="text" placeholder="Explain your code architecture..." autocomplete="off" />
+            <button id="send-btn">Ask</button>
+        </div>
+        <div style="text-align: center; margin-top: 8px;">
+            <span class="user-info">Logged in as ${displayName}</span>
+        </div>
     </div>
 
     <script>
@@ -444,12 +577,39 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         const input = document.getElementById('question-input');
         const sendBtn = document.getElementById('send-btn');
 
-        function addMessage(className, text) {
-            const div = document.createElement('div');
-            div.className = 'msg ' + className;
-            div.textContent = text;
-            chatLog.appendChild(div);
-            chatLog.scrollTop = chatLog.scrollHeight;
+        // Initializing history
+        vscode.postMessage({ type: 'getHistory' });
+
+        function addMessage(role, text, skipScroll = false) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'msg-wrapper ' + (role === 'user' ? 'user' : 'assistant');
+            
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'msg';
+            msgDiv.innerHTML = formatText(text);
+            
+            const metaDiv = document.createElement('div');
+            metaDiv.className = 'meta';
+            metaDiv.textContent = role === 'user' ? 'You' : 'Cortex';
+            
+            wrapper.appendChild(msgDiv);
+            wrapper.appendChild(metaDiv);
+            chatLog.appendChild(wrapper);
+            
+            if (!skipScroll) {
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
+        }
+
+        function formatText(t) {
+            // Simple backtick formatting for code
+            return t.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+        }
+
+        function startNewChat() {
+            if (confirm('Reset conversation? All current messages will be archived.')) {
+                vscode.postMessage({ type: 'newChat' });
+            }
         }
 
         function send() {
@@ -471,18 +631,40 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         window.addEventListener('message', (event) => {
             const msg = event.data;
-            const loadingMsgs = chatLog.querySelectorAll('.loading');
-            loadingMsgs.forEach(el => el.remove());
+            const loadingWrappers = chatLog.querySelectorAll('.loading-wrapper');
+            loadingWrappers.forEach(el => el.remove());
 
             switch (msg.type) {
+                case 'history':
+                    chatLog.innerHTML = '';
+                    if (msg.messages.length === 0) {
+                        addMessage('assistant', 'Welcome! How can I help you today?');
+                    } else {
+                        msg.messages.forEach(m => {
+                            addMessage(m.role, m.content, true);
+                        });
+                    }
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                    break;
+                case 'chatCleared':
+                    chatLog.innerHTML = '';
+                    addMessage('assistant', 'Context reset. I am ready for a new task.');
+                    break;
                 case 'loading':
-                    addMessage('loading', 'Thinking...');
+                    const loader = document.createElement('div');
+                    loader.className = 'msg-wrapper assistant loading-wrapper';
+                    loader.innerHTML = '<div class="msg loading">Thinking...</div>';
+                    chatLog.appendChild(loader);
+                    chatLog.scrollTop = chatLog.scrollHeight;
                     break;
                 case 'answer':
                     addMessage('assistant', msg.summary);
                     break;
                 case 'error':
-                    addMessage('error', msg.message);
+                    const errWrapper = document.createElement('div');
+                    errWrapper.className = 'msg-wrapper assistant';
+                    errWrapper.innerHTML = '<div class="msg error">Error: ' + msg.message + '</div>';
+                    chatLog.appendChild(errWrapper);
                     break;
             }
         });
@@ -490,4 +672,5 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
     }
+
 }

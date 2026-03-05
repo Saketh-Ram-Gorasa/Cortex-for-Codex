@@ -1,0 +1,7 @@
+# .cortexignore
+# Ignore all .secret files
+*.secret
+# Ignore the node_modules directory (if it existed)
+node_modules/
+# Ignore specific log files
+debug.log

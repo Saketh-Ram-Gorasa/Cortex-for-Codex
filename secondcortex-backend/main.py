@@ -45,7 +45,10 @@ from models.schemas import (
     ResurrectionRequest,
     ResurrectionResponse,
     SnapshotPayload,
+    ChatMessage,
+    ChatHistoryResponse,
 )
+from auth.routes import user_db
 from services.vector_db import VectorDBService
 
 # ── Logging setup ───────────────────────────────────────────────
@@ -185,6 +188,21 @@ async def get_events(user_id: str = Depends(get_current_user)):
     return {"events": events}
 
 
+
+@app.get("/api/v1/chat/history", response_model=ChatHistoryResponse)
+async def get_chat_history(user_id: str = Depends(get_current_user)):
+    """Retrieve persistent chat history for the user."""
+    messages = user_db.get_chat_history(user_id)
+    return ChatHistoryResponse(messages=messages)
+
+
+@app.delete("/api/v1/chat/history")
+async def clear_chat_history(user_id: str = Depends(get_current_user)):
+    """Clear chat history (New Chat)."""
+    user_db.delete_chat_history(user_id)
+    return {"status": "ok", "message": "Chat history cleared."}
+
+
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def handle_query(
     request: QueryRequest,
@@ -201,6 +219,10 @@ async def handle_query(
 
         # Step 2: Execute — synthesize and validate
         response = await executor.synthesize(request.question, plan_result)
+
+        # Step 3: Persist history
+        user_db.save_chat_message(user_id, "user", request.question)
+        user_db.save_chat_message(user_id, "assistant", response.summary)
 
         logger.info("Query answered: %s", response.summary[:100])
         return response

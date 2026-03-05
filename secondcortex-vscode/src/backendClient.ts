@@ -139,4 +139,46 @@ export class BackendClient {
             return null;
         }
     }
+
+    /**
+     * Fetch persistent chat history for the current user.
+     */
+    async getChatHistory(): Promise<{ role: string; content: string; timestamp: string }[]> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/chat/history`, {
+                headers: await this.getHeaders(),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return [];
+            }
+            if (!res.ok) return [];
+            const data = await res.json() as { messages: any[] };
+            return data.messages || [];
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error fetching chat history: ${err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Clear all chat history for the current user.
+     */
+    async clearChatHistory(): Promise<boolean> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/chat/history`, {
+                method: 'DELETE',
+                headers: await this.getHeaders(),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return false;
+            }
+            return res.ok;
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error clearing chat history: ${err}`);
+            return false;
+        }
+    }
 }
+

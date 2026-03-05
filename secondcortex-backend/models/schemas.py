@@ -94,3 +94,14 @@ class StoredSnapshot(BaseModel):
     terminal_commands: list[str] = Field(default_factory=list)
     metadata: MemoryMetadata | None = None
     embedding: list[float] | None = None
+
+# ── Chat History ────────────────────────────────────────────────
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: datetime
+
+
+class ChatHistoryResponse(BaseModel):
+    messages: list[ChatMessage]

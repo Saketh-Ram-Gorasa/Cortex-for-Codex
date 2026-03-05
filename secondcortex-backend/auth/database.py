@@ -65,7 +65,44 @@ class UserDB:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
             conn.commit()
+
+    def save_chat_message(self, user_id: str, role: str, content: str) -> None:
+        """Save a chat message (user or assistant) to the database."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO chat_messages (user_id, role, content) VALUES (?, ?, ?)",
+                (user_id, role, content),
+            )
+            conn.commit()
+
+    def get_chat_history(self, user_id: str, limit: int = 50) -> list[dict]:
+        """Retrieve recent chat history for a user."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT role, content, timestamp FROM chat_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            )
+            rows = cursor.fetchall()
+            # Return in chronological order
+            return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in reversed(rows)]
+
+    def delete_chat_history(self, user_id: str) -> None:
+        """Clear all chat history for a user (New Chat functionality)."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
+            conn.commit()
+
 
     def create_user(self, email: str, password: str, display_name: str = "") -> dict | None:
         """Create a new user. Returns user dict or None if email already exists."""
