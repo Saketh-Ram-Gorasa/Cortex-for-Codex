@@ -15,7 +15,7 @@ import logging
 
 from config import settings
 from services.vector_db import VectorDBService
-from services.llm_client import create_gemini_client, get_gemini_model
+from services.llm_client import create_groq_client, get_groq_model
 from services.rate_limiter import rate_limited_call
 
 logger = logging.getLogger("secondcortex.planner")
