@@ -240,7 +240,7 @@ async def handle_query(
     Combines retrieval, planning, and execution logic.
     """
     try:
-        logger.info("Query received: %s (user=%s, session=%s)", req.question, user["id"], session_id)
+        logger.info("Query received: %s (user=%s, session=%s)", req.question, user_id, session_id)
 
         # Step 1: Plan — break the question into search tasks
         plan_result = await planner.plan(req.question, user_id=user_id)

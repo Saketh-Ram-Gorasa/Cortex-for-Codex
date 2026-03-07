@@ -4,11 +4,25 @@
   "description": "Your AI-Powered Second Brain for Development Context — tracks IDE activity, enforces a Semantic Firewall, and enables Workspace Resurrection.",
   "version": "0.1.2",
   "publisher": "secondcortex-labs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Syed-Suhaan/SecondCortex-Labs"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "media/icon.png",
   "categories": [
+    "Machine Learning",
+    "Education",
     "Other"
+  ],
+  "keywords": [
+    "AI",
+    "productivity",
+    "context",
+    "resurrection",
+    "security"
   ],
   "activationEvents": [
     "*"
