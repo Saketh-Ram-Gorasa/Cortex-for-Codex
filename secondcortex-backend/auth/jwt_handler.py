@@ -47,3 +47,24 @@ def verify_token(token: str) -> dict | None:
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid token: %s", e)
         return None
+
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+bearer_scheme = HTTPBearer(auto_error=False)
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
+    """
+    Validates the Bearer JWT token and returns the user_id.
+    Every protected endpoint requires a valid token.
+    """
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Missing Authorization header. Please log in.")
+
+    payload = verify_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token. Please log in again.")
+    
+    return payload.get("sub")
