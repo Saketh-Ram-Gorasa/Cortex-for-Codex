@@ -101,31 +101,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ── Include auth routes ─────────────────────────────────────────
 app.include_router(auth_router)
 
-# ── MCP Server Mount & Auth Middleware ──────────────────────────
+# ── MCP Server Mount ──────────────────────────
 from mcp_server import mcp
-from auth.jwt_handler import verify_token
-
-@app.middleware("http")
-async def mcp_auth_middleware(request: Request, call_next):
-    """Protects the /mcp route with JWT authentication."""
-    if request.url.path.startswith("/mcp"):
-        # 1. Extract token from header
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return JSONResponse(status_code=401, content={"detail": "Missing or invalid Authorization header"})
-        
-        token = auth_header.split(" ")[1]
-        
-        # 2. Verify token
-        payload = verify_token(token)
-        if not payload:
-            return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
-        
-        # 3. Inject user_id into request state so MCP tools can access it
-        request.state.user_id = payload.get("sub")
-        
-    response = await call_next(request)
-    return response
 
 app.mount("/mcp", mcp.sse_app())
 
