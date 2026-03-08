@@ -87,6 +87,7 @@ class SafetyReport(BaseModel):
 class ResurrectionResponse(BaseModel):
     commands: list[ResurrectionCommand]
     impact_analysis: SafetyReport | None = None
+    plan_summary: str | None = Field(None, alias="planSummary")
 
 
 # ── Internal: stored snapshot record ────────────────────────────

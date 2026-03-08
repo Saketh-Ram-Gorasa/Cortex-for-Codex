@@ -121,7 +121,7 @@ export class BackendClient {
     /**
      * Request a workspace resurrection plan from the backend.
      */
-    async getResurrectionPlan(target: string, currentWorkspace?: string): Promise<{ commands: unknown[] } | null> {
+    async getResurrectionPlan(target: string, currentWorkspace?: string): Promise<{ commands: unknown[], planSummary?: string } | null> {
         try {
             const body: any = { target };
             if (currentWorkspace) {

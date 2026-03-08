@@ -24,6 +24,20 @@ export class WorkspaceResurrector {
             return;
         }
 
+        // Show proposed action plan to the user for Human-in-the-Loop confirmation
+        const planSummary = plan.planSummary || 'I will restore your workspace state based on the retrieved context.';
+        const userChoice = await vscode.window.showInformationMessage(
+            `SecondCortex: Proposed Action Plan\n\n${planSummary}\n\nDo you want to proceed?`,
+            { modal: true },
+            'Proceed',
+            'Cancel'
+        );
+
+        if (userChoice !== 'Proceed') {
+            this.output.appendLine('[Resurrector] Resurrection canceled by user.');
+            return;
+        }
+
         await this.execute(plan.commands as ResurrectionCommand[]);
     }
 

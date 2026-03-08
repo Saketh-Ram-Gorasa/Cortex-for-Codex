@@ -359,7 +359,8 @@ async def handle_resurrection(
 
     return ResurrectionResponse(
         commands=commands,
-        impact_analysis=safety_report
+        impact_analysis=safety_report,
+        plan_summary=response.summary
     )
 
 
