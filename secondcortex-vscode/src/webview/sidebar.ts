@@ -65,8 +65,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
                 case 'ask': {
                     const question = message.question as string;
-                    const sessionId = message.sessionId as string | undefined;
+                    let sessionId = message.sessionId as string | undefined;
                     this.output.appendLine(`[Sidebar] User asked: ${question} (session: ${sessionId})`);
+
+                    // Ensure chats are always attached to a session so they appear in "Past Chats".
+                    if (!sessionId) {
+                        const autoTitle = (question || 'New Chat').trim().slice(0, 48) || 'New Chat';
+                        const createdSessionId = await this.backend.createChatSession(autoTitle);
+                        if (createdSessionId) {
+                            sessionId = createdSessionId;
+                            this.postMessage({ type: 'sessionBound', sessionId });
+                        }
+                    }
 
                     const normalized = (question || '').trim().toLowerCase();
                     const openShadowGraphIntent =
@@ -129,6 +139,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     const sessionTitle = message.title || "New Chat";
                     const newId = await this.backend.createChatSession(sessionTitle);
                     this.postMessage({ type: 'chatCleared', sessionId: newId });
+                    const sessions = await this.backend.getChatSessions();
+                    this.postMessage({ type: 'sessions', sessions });
                     break;
                 }
                 case 'switchSession': {
@@ -184,93 +196,118 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SecondCortex — Sign In</title>
     <style>
+        :root {
+            --bg: #080808;
+            --surface: #111111;
+            --border: rgba(255,255,255,0.08);
+            --text: #f0f0f0;
+            --muted: rgba(255,255,255,0.55);
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: var(--vscode-font-family);
-            color: var(--vscode-foreground);
-            background: var(--vscode-sideBar-background);
+            color: var(--text);
+            background: var(--bg);
             padding: 16px;
             display: flex;
             flex-direction: column;
             height: 100vh;
         }
         .brand {
-            text-align: center;
-            margin-bottom: 24px;
-            padding-top: 20px;
+            margin-bottom: 22px;
+            padding-top: 14px;
+        }
+        .brand::before {
+            content: 'SecondCortex Access';
+            display: block;
+            font-size: 10px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 8px;
         }
         .brand h1 {
-            font-size: 18px;
+            font-size: 20px;
             font-weight: 700;
-            margin-bottom: 4px;
+            margin-bottom: 6px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
         }
         .brand p {
-            font-size: 11px;
-            opacity: 0.6;
+            font-size: 12px;
+            color: var(--muted);
         }
         .tabs {
             display: flex;
             gap: 0;
-            margin-bottom: 16px;
-            border-bottom: 1px solid var(--vscode-panel-border);
+            margin-bottom: 18px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            border-radius: 8px;
+            padding: 4px;
         }
         .tab {
             flex: 1;
             padding: 8px 0;
             text-align: center;
-            font-size: 13px;
-            font-weight: 500;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
             cursor: pointer;
             border: none;
             background: transparent;
-            color: var(--vscode-foreground);
-            opacity: 0.5;
-            border-bottom: 2px solid transparent;
+            color: var(--muted);
+            border-radius: 6px;
             transition: all 0.2s;
         }
         .tab.active {
-            opacity: 1;
-            border-bottom-color: var(--vscode-button-background);
+            color: var(--text);
+            background: rgba(255,255,255,0.08);
         }
-        .tab:hover { opacity: 0.8; }
+        .tab:hover { color: var(--text); }
         .form-group {
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         .form-group label {
             display: block;
-            font-size: 12px;
-            font-weight: 500;
-            margin-bottom: 4px;
-            opacity: 0.8;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            color: var(--muted);
         }
         .form-group input {
             width: 100%;
-            padding: 8px 10px;
+            padding: 9px 11px;
             font-size: 13px;
-            border: 1px solid var(--vscode-input-border);
-            background: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            border-radius: 6px;
             outline: none;
         }
         .form-group input:focus {
-            border-color: var(--vscode-focusBorder);
+            border-color: rgba(255,255,255,0.28);
         }
         .submit-btn {
             width: 100%;
-            padding: 10px;
-            margin-top: 8px;
-            font-size: 13px;
+            padding: 11px;
+            margin-top: 10px;
+            font-size: 11px;
             font-weight: 600;
-            background: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            background: rgba(255,255,255,0.9);
+            color: #0b0b0b;
             border: none;
-            border-radius: 4px;
+            border-radius: 6px;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: opacity 0.2s;
         }
         .submit-btn:hover {
-            background: var(--vscode-button-hoverBackground);
+            opacity: 0.86;
         }
         .submit-btn:disabled {
             opacity: 0.5;
@@ -291,8 +328,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
     <div class="brand">
-        <h1>🧠 SecondCortex</h1>
-        <p>Your AI-Powered Second Brain</p>
+        <h1>SecondCortex</h1>
+        <p>Persistent context for your code</p>
     </div>
 
     <div class="tabs">
@@ -379,19 +416,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <title>SecondCortex</title>
     <style>
         :root {
-            --accent: #6366f1;
-            --accent-glow: rgba(99, 102, 241, 0.4);
-            --bg: #020617;
-            --surface: #0f172a;
+            --accent: #e5e7eb;
+            --accent-soft: rgba(229, 231, 235, 0.12);
+            --bg: #080808;
+            --surface: #111111;
             --border: rgba(255, 255, 255, 0.08);
-            --text-main: #f8fafc;
-            --text-dim: #94a3b8;
+            --text-main: #f0f0f0;
+            --text-dim: rgba(255,255,255,0.55);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         
         body {
-            font-family: 'Inter', var(--vscode-font-family), system-ui;
+            font-family: var(--vscode-font-family), system-ui;
             color: var(--text-main);
             background: var(--bg);
             padding: 0;
@@ -399,9 +436,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             flex-direction: column;
             height: 100vh;
             overflow: hidden;
-            background-image: 
-                radial-gradient(circle at top right, rgba(99, 102, 241, 0.05), transparent 400px),
-                radial-gradient(circle at bottom left, rgba(244, 114, 182, 0.03), transparent 300px);
+            background-image: radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.04), transparent 50%);
         }
 
         /* ── Header ────────────────────────────────────────── */
@@ -410,18 +445,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             align-items: center;
             justify-content: space-between;
             padding: 16px;
-            background: rgba(15, 23, 42, 0.7);
-            backdrop-filter: blur(12px);
+            background: rgba(17, 17, 17, 0.95);
             border-bottom: 1px solid var(--border);
             z-index: 20;
         }
         .header h2 {
             font-size: 15px;
             font-weight: 700;
-            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: var(--text-main);
             letter-spacing: -0.01em;
+            text-transform: uppercase;
         }
         .header-actions {
             display: flex;
@@ -451,14 +484,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             transform: translateY(-1px);
         }
         .icon-btn.primary {
-            background: rgba(99, 102, 241, 0.1);
-            border-color: rgba(99, 102, 241, 0.2);
-            color: #818cf8;
+            background: var(--accent-soft);
+            border-color: rgba(255, 255, 255, 0.22);
+            color: var(--text-main);
         }
         .icon-btn.primary:hover {
             background: var(--accent);
-            color: #fff;
-            box-shadow: 0 0 16px var(--accent-glow);
+            color: #0b0b0b;
         }
 
         /* ── History Panel ─────────────────────────────────── */
@@ -468,8 +500,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(2, 6, 23, 0.95);
-            backdrop-filter: blur(20px);
+            background: rgba(8, 8, 8, 0.96);
             z-index: 30;
             transform: translateX(-100%);
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -501,7 +532,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         .history-item.active {
             border-color: var(--accent);
-            background: rgba(99, 102, 241, 0.1);
+            background: var(--accent-soft);
         }
         .history-item-title {
             font-size: 13px;
@@ -554,10 +585,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             position: relative;
         }
         .user .msg {
-            background: var(--accent);
-            color: #fff;
+            background: #e5e7eb;
+            color: #0b0b0b;
             border-bottom-right-radius: 2px;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+            box-shadow: none;
         }
         .assistant .msg {
             background: var(--surface);
@@ -589,8 +620,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         /* ── Input Area ────────────────────────────────────── */
         .footer {
             padding: 16px;
-            background: rgba(15, 23, 42, 0.8);
-            backdrop-filter: blur(12px);
+            background: rgba(17, 17, 17, 0.95);
             border-top: 1px solid var(--border);
         }
         .input-container {
@@ -604,7 +634,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         .input-container:focus-within {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
         }
         #question-input {
             flex: 1;
@@ -618,7 +648,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         #send-btn {
             background: var(--accent);
-            color: #fff;
+            color: #0b0b0b;
             border: none;
             border-radius: 7px;
             padding: 0 14px;
@@ -639,8 +669,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             gap: 4px;
             font-size: 10px;
             font-weight: 700;
-            color: #10b981;
-            background: rgba(16, 185, 129, 0.1);
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.08);
             padding: 2px 8px;
             border-radius: 12px;
             text-transform: uppercase;
@@ -652,20 +682,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             color: var(--text-dim);
             font-weight: 500;
         }
+
+        .bottom-actions {
+            margin-top: 10px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .bottom-actions .icon-btn {
+            width: 100%;
+            justify-content: center;
+            padding: 8px 10px;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <div>
-            <h2 id="current-title">🧠 SecondCortex</h2>
+            <h2 id="current-title">SecondCortex</h2>
             <div class="shield-badge">
-                <span style="font-size: 12px;">🛡️</span> Privacy Protected
+                <span style="font-size: 12px;">SECURE</span> Privacy Protected
             </div>
         </div>
         <div class="header-actions">
             <button class="icon-btn" onclick="toggleHistory()">History</button>
-            <button class="icon-btn" onclick="openShadowGraph()">Shadow Graph</button>
-            <button class="icon-btn primary" onclick="startNewChat()">+ New Chat</button>
+            <button class="icon-btn primary" onclick="startNewChat()">New Chat</button>
             <button class="icon-btn" onclick="doLogout()">Logout</button>
         </div>
     </div>
@@ -690,6 +732,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         </div>
         <div style="text-align: center; margin-top: 8px;">
             <span class="user-info">Logged in as ${displayName}</span>
+        </div>
+        <div class="bottom-actions">
+            <button class="icon-btn" onclick="openShadowGraph()">Open Shadow Graph</button>
         </div>
     </div>
 
@@ -764,10 +809,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         function startNewChat() {
-            const title = prompt('Chat Title?', 'New Task');
-            if (title) {
-                vscode.postMessage({ type: 'newChat', title });
-            }
+            vscode.postMessage({ type: 'newChat', title: 'New Chat' });
         }
 
         function loadSession(id) {
@@ -833,12 +875,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 case 'sessions':
                     renderSessions(msg.sessions);
+                    if (!state.sessionId && Array.isArray(msg.sessions) && msg.sessions.length > 0) {
+                        state.sessionId = msg.sessions[0].id;
+                        vscode.postMessage({ type: 'switchSession', sessionId: state.sessionId });
+                    }
                     break;
                 case 'chatCleared':
                     state.sessionId = msg.sessionId;
                     state.messages = [];
                     renderAllMessages([]);
                     saveState();
+                    vscode.postMessage({ type: 'getSessions' });
+                    break;
+                case 'sessionBound':
+                    state.sessionId = msg.sessionId;
+                    saveState();
+                    vscode.postMessage({ type: 'getSessions' });
                     break;
                 case 'loading':
                     const loader = document.createElement('div');

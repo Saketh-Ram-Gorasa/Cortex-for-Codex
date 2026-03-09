@@ -33,7 +33,7 @@ export default function AuthGate() {
 
     if (isChecking) {
         return (
-            <div className="flex items-center justify-center w-full h-screen bg-[#020617] text-indigo-500 text-lg font-semibold">
+            <div className="sc-shell sc-center-text">
                 Authenticating...
             </div>
         );
@@ -44,39 +44,37 @@ export default function AuthGate() {
     }
 
     return (
-        <div className="relative w-full h-screen bg-[#020617] overflow-hidden">
-            {/* Top Navigation Bar */}
-            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-1 p-1 bg-white/5 border border-white/10 backdrop-blur-xl rounded-2xl shadow-2xl">
+        <div className="sc-shell sc-app-shell">
+            <div className="sc-app-topbar">
+                <div className="nav-logo">
+                    Second<span>Cortex</span>
+                </div>
+
+                <div className="sc-app-tabs">
                 <button
                     onClick={() => setActiveTab('dashboard')}
-                    className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 ${activeTab === 'dashboard'
-                            ? 'bg-white text-black shadow-lg'
-                            : 'text-gray-400 hover:text-white hover:bg-white/5'
-                        }`}
+                    className={`sc-app-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
                 >
                     Dashboard
                 </button>
                 <button
                     onClick={() => setActiveTab('live')}
-                    className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 ${activeTab === 'live'
-                            ? 'bg-white text-black shadow-lg'
-                            : 'text-gray-400 hover:text-white hover:bg-white/5'
-                        }`}
+                    className={`sc-app-tab ${activeTab === 'live' ? 'active' : ''}`}
                 >
                     Live Context Graph
                 </button>
+                </div>
+
+                <button
+                    onClick={handleLogout}
+                    className="btn-secondary sc-logout"
+                    type="button"
+                >
+                    Logout
+                </button>
             </div>
 
-            {/* Logout Button */}
-            <button
-                onClick={handleLogout}
-                className="fixed top-6 right-6 z-[100] px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl text-xs font-bold backdrop-blur-md transition-all active:scale-95"
-            >
-                Logout
-            </button>
-
-            {/* Content Area */}
-            <div className="w-full h-full overflow-y-auto custom-scrollbar">
+            <div className="sc-app-content custom-scrollbar">
                 {activeTab === 'dashboard' ? (
                     <Dashboard token={token} />
                 ) : (

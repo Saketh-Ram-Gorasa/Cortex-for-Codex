@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     ReactFlow,
     Background,
-    Controls,
     MiniMap,
     useNodesState,
     useEdgesState,
@@ -14,9 +13,9 @@ import {
     type Connection,
     MarkerType,
     BackgroundVariant,
+    type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import * as d3 from 'd3-force';
 
 type VsCodeApi = {
     postMessage: (message: unknown) => void;
@@ -40,8 +39,8 @@ interface SnapshotEvent {
 
 const NODE_STYLES: Record<string, React.CSSProperties> = {
     commit: {
-        background: '#667eea',
-        color: '#fff',
+        background: '#111111',
+        color: '#f0f0f0',
         border: '1px solid rgba(255,255,255,0.2)',
         borderRadius: '12px',
         padding: '12px 18px',
@@ -50,8 +49,8 @@ const NODE_STYLES: Record<string, React.CSSProperties> = {
         textWrap: 'balance',
     },
     file: {
-        background: '#f5576c',
-        color: '#fff',
+        background: '#1a1a1a',
+        color: '#f0f0f0',
         border: '1px solid rgba(255,255,255,0.2)',
         borderRadius: '10px',
         padding: '12px 16px',
@@ -60,9 +59,9 @@ const NODE_STYLES: Record<string, React.CSSProperties> = {
         textWrap: 'balance',
     },
     entity: {
-        background: '#0f172a',
-        color: '#38bdf8',
-        border: '1px solid rgba(56, 189, 248, 0.4)',
+        background: '#080808',
+        color: 'rgba(255,255,255,0.75)',
+        border: '1px solid rgba(255,255,255,0.22)',
         borderRadius: '8px',
         padding: '8px 14px',
         fontSize: '12px',
@@ -70,9 +69,9 @@ const NODE_STYLES: Record<string, React.CSSProperties> = {
         textWrap: 'balance',
     },
     reasoning: {
-        background: '#10b981',
-        color: '#ecfdf5',
-        border: '1px solid rgba(255,255,255,0.3)',
+        background: '#f0f0f0',
+        color: '#080808',
+        border: '1px solid rgba(255,255,255,0.55)',
         borderRadius: '16px',
         padding: '16px 20px',
         fontSize: '14px',
@@ -102,8 +101,8 @@ export default function ContextGraph({
     const [selectedIndex, setSelectedIndex] = useState<number>(0);
     const [isPinnedInPast, setIsPinnedInPast] = useState(false);
     const [lastEvent, setLastEvent] = useState<string>('Waiting for snapshots...');
+    const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null);
     const vscodeApiRef = useRef<VsCodeApi | null>(null);
-    const simulationRef = useRef<d3.Simulation<any, any> | null>(null);
 
     const onConnect = useCallback(
         (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
@@ -205,7 +204,7 @@ export default function ContextGraph({
                 target: fileNodeId,
                 animated: true,
                 markerEnd: { type: MarkerType.ArrowClosed },
-                style: { stroke: 'rgba(102, 126, 234, 0.8)', strokeWidth: 2 },
+                style: { stroke: 'rgba(255,255,255,0.45)', strokeWidth: 2 },
             });
         }
 
@@ -222,7 +221,7 @@ export default function ContextGraph({
                 id: `e-${fileNodeId}-${entityNodeId}`,
                 source: fileNodeId,
                 target: entityNodeId,
-                style: { stroke: 'rgba(56, 189, 248, 0.5)', strokeDasharray: '4,6', strokeWidth: 1.5 },
+                style: { stroke: 'rgba(255,255,255,0.35)', strokeDasharray: '4,6', strokeWidth: 1.5 },
             });
         });
 
@@ -240,56 +239,13 @@ export default function ContextGraph({
                 source: fileNodeId,
                 target: reasoningNodeId,
                 animated: true,
-                style: { stroke: '#10b981', strokeWidth: 2.5 },
+                style: { stroke: 'rgba(255,255,255,0.75)', strokeWidth: 2.5 },
                 markerEnd: { type: MarkerType.ArrowClosed },
             });
         }
 
         return { nodes: outNodes, edges: outEdges };
     }, []);
-
-    useEffect(() => {
-        if (nodes.length === 0) return;
-
-        const simNodes = nodes.map((n) => ({ ...n, x: n.position.x, y: n.position.y }));
-        const nodeIds = new Set(simNodes.map(n => n.id));
-        const simLinks = edges
-            .filter(e => nodeIds.has(e.source) && nodeIds.has(e.target))
-            .map((e) => ({ source: e.source, target: e.target, id: e.id }));
-
-        const simulation = d3.forceSimulation(simNodes)
-            .force('charge', d3.forceManyBody().strength(-400).distanceMax(800))
-            .force('link', d3.forceLink(simLinks).id((d: any) => d.id).distance(160).strength(0.4))
-            .force('center', d3.forceCenter(0, 0).strength(0.02))
-            .force('collide', d3.forceCollide().radius((d: any) => {
-                const label = d.data?.label || '';
-                return Math.max(90, label.length * 6);
-            }).iterations(4))
-            .alpha(0.3)
-            .alphaDecay(0.04)
-            .restart();
-
-        simulation.on('tick', () => {
-            setNodes((currentNodes) =>
-                currentNodes.map((n) => {
-                    const simNode = simNodes.find((sn) => sn.id === n.id);
-                    if (simNode) {
-                        return {
-                            ...n,
-                            position: { x: simNode.x ?? 0, y: simNode.y ?? 0 },
-                        };
-                    }
-                    return n;
-                })
-            );
-        });
-
-        simulationRef.current = simulation;
-
-        return () => {
-            simulation.stop();
-        };
-    }, [nodes.length, edges.length, setNodes]);
 
     useEffect(() => {
         let active = true;
@@ -300,7 +256,7 @@ export default function ContextGraph({
                 if (token) {
                     headers['Authorization'] = `Bearer ${token}`;
                 }
-                const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=300`, { headers });
+                const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000`, { headers });
 
                 if (res.status === 401 || res.status === 403) {
                     setIsConnected(false);
@@ -313,27 +269,15 @@ export default function ContextGraph({
                     const data = await res.json();
                     if (Array.isArray(data.timeline)) {
                         const nextTimeline = data.timeline as SnapshotEvent[];
-                        setTimeline((current) => {
-                            const currentIds = new Set(current.map((s) => s.id));
-                            const merged = [...current];
-                            nextTimeline.forEach((snapshot) => {
-                                if (!currentIds.has(snapshot.id)) {
-                                    merged.push(snapshot);
+                        setTimeline(nextTimeline);
+                        if (nextTimeline.length > 0) {
+                            setSelectedIndex((prevIndex) => {
+                                if (!isPinnedInPast) {
+                                    return nextTimeline.length - 1;
                                 }
+                                return Math.min(prevIndex, nextTimeline.length - 1);
                             });
-                            merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-                            if (merged.length > 0) {
-                                setSelectedIndex((prevIndex) => {
-                                    if (!isPinnedInPast) {
-                                        return merged.length - 1;
-                                    }
-                                    return Math.min(prevIndex, merged.length - 1);
-                                });
-                            }
-
-                            return merged;
-                        });
+                        }
                     }
                 } else {
                     setIsConnected(false);
@@ -375,7 +319,7 @@ export default function ContextGraph({
         : 'n/a';
 
     return (
-        <div style={{ width: '100%', height: '100vh', background: '#020617' }}>
+        <div style={{ width: '100%', height: '100vh', background: '#080808' }}>
             <div
                 style={{
                     position: 'absolute',
@@ -389,11 +333,11 @@ export default function ContextGraph({
             >
                 <div
                     style={{
-                        background: 'rgba(15, 23, 42, 0.95)',
+                        background: 'rgba(17,17,17,0.94)',
                         border: '1px solid rgba(255,255,255,0.08)',
                         borderRadius: 16,
                         padding: '12px 20px',
-                        color: '#f8fafc',
+                        color: '#f0f0f0',
                         fontSize: 14,
                         fontWeight: 500,
                         display: 'flex',
@@ -406,7 +350,7 @@ export default function ContextGraph({
                             width: 10,
                             height: 10,
                             borderRadius: '50%',
-                            background: isConnected ? '#10b981' : '#ef4444',
+                            background: isConnected ? '#f0f0f0' : '#7a7a7a',
                         }}
                     />
                     {isConnected ? 'Timeline Sync Active' : 'Offline'}
@@ -414,11 +358,11 @@ export default function ContextGraph({
 
                 <div
                     style={{
-                        background: 'rgba(15, 23, 42, 0.95)',
+                        background: 'rgba(17,17,17,0.94)',
                         border: '1px solid rgba(255,255,255,0.08)',
                         borderRadius: 16,
                         padding: '12px 24px',
-                        color: '#cbd5e1',
+                        color: 'rgba(255,255,255,0.72)',
                         fontSize: 14,
                         maxWidth: 500,
                         overflow: 'hidden',
@@ -436,17 +380,93 @@ export default function ContextGraph({
                     top: 24,
                     right: 24,
                     zIndex: 10,
-                    background: 'rgba(15, 23, 42, 0.95)',
+                    background: 'rgba(17,17,17,0.94)',
                     border: '1px solid rgba(255,255,255,0.08)',
                     borderRadius: 16,
                     padding: '16px 24px',
-                    color: '#fff',
+                    color: '#f0f0f0',
                     fontSize: 20,
                     fontWeight: 700,
                     letterSpacing: '-0.02em',
                 }}
             >
-                SecondCortex <span style={{ opacity: 0.3, fontWeight: 400 }}>| Shadow Graph Time-Travel</span>
+                SecondCortex <span style={{ opacity: 0.3, fontWeight: 400 }}>| Shadow Graph</span>
+            </div>
+
+            <div
+                style={{
+                    position: 'absolute',
+                    top: 92,
+                    right: 24,
+                    zIndex: 20,
+                    display: 'flex',
+                    gap: 8,
+                    background: 'rgba(17,17,17,0.94)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 12,
+                    padding: 8,
+                    backdropFilter: 'blur(12px)',
+                }}
+            >
+                <button
+                    type="button"
+                    onClick={() => reactFlowInstance?.zoomIn({ duration: 200 })}
+                    style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.2)',
+                        background: 'rgba(255,255,255,0.06)',
+                        color: '#f0f0f0',
+                        fontSize: 22,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                    }}
+                    title="Zoom in"
+                    aria-label="Zoom in"
+                >
+                    +
+                </button>
+                <button
+                    type="button"
+                    onClick={() => reactFlowInstance?.zoomOut({ duration: 200 })}
+                    style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.2)',
+                        background: 'rgba(255,255,255,0.06)',
+                        color: '#f0f0f0',
+                        fontSize: 22,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                    }}
+                    title="Zoom out"
+                    aria-label="Zoom out"
+                >
+                    -
+                </button>
+                <button
+                    type="button"
+                    onClick={() => reactFlowInstance?.fitView({ padding: 0.25, duration: 250 })}
+                    style={{
+                        minWidth: 86,
+                        height: 38,
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.2)',
+                        background: 'rgba(255,255,255,0.06)',
+                        color: '#f0f0f0',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        cursor: 'pointer',
+                    }}
+                    title="Fit graph to screen"
+                    aria-label="Fit graph to screen"
+                >
+                    Fit
+                </button>
             </div>
 
             <div
@@ -456,7 +476,7 @@ export default function ContextGraph({
                     right: 24,
                     bottom: 24,
                     zIndex: 20,
-                    background: 'rgba(15, 23, 42, 0.92)',
+                    background: 'rgba(17,17,17,0.94)',
                     border: '1px solid rgba(255,255,255,0.1)',
                     borderRadius: 16,
                     padding: 14,
@@ -464,16 +484,16 @@ export default function ContextGraph({
                 }}
             >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                    <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>
+                    <div style={{ color: '#f0f0f0', fontSize: 13, fontWeight: 600 }}>
                         Snapshot Slider ({timeline.length} snapshots)
                     </div>
                     <button
                         onClick={handleRestore}
                         disabled={!selectedSnapshot}
                         style={{
-                            border: '1px solid rgba(16,185,129,0.5)',
-                            color: '#34d399',
-                            background: 'rgba(16,185,129,0.12)',
+                            border: '1px solid rgba(255,255,255,0.35)',
+                            color: '#f0f0f0',
+                            background: 'rgba(255,255,255,0.08)',
                             borderRadius: 8,
                             padding: '8px 14px',
                             fontSize: 12,
@@ -513,36 +533,36 @@ export default function ContextGraph({
                                 border: 'none',
                                 flex: '0 0 auto',
                                 cursor: 'pointer',
-                                background: idx === selectedIndex ? '#f59e0b' : 'rgba(148,163,184,0.55)',
-                                boxShadow: idx === selectedIndex ? '0 0 0 3px rgba(245,158,11,0.25)' : 'none',
+                                background: idx === selectedIndex ? '#f0f0f0' : 'rgba(148,163,184,0.55)',
+                                boxShadow: idx === selectedIndex ? '0 0 0 3px rgba(255,255,255,0.2)' : 'none',
                             }}
                         />
                     ))}
                 </div>
 
                 <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                    <div style={{ background: 'rgba(15,23,42,0.66)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 10 }}>
-                        <div style={{ fontSize: 12, color: '#93c5fd', marginBottom: 6, fontWeight: 700 }}>Files At This Point</div>
+                    <div style={{ background: 'rgba(8,8,8,0.66)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 10 }}>
+                        <div style={{ fontSize: 12, color: '#f0f0f0', marginBottom: 6, fontWeight: 700 }}>Files At This Point</div>
                         {recentFileList.length === 0 ? (
-                            <div style={{ fontSize: 12, color: '#94a3b8' }}>No files yet</div>
+                            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>No files yet</div>
                         ) : (
                             recentFileList.map((file) => (
-                                <div key={file} style={{ fontSize: 12, color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <div key={file} style={{ fontSize: 12, color: '#f0f0f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                     {file}
                                 </div>
                             ))
                         )}
                     </div>
 
-                    <div style={{ background: 'rgba(15,23,42,0.66)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 10 }}>
-                        <div style={{ fontSize: 12, color: '#86efac', marginBottom: 6, fontWeight: 700 }}>Recent Summaries</div>
+                    <div style={{ background: 'rgba(8,8,8,0.66)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 10 }}>
+                        <div style={{ fontSize: 12, color: '#f0f0f0', marginBottom: 6, fontWeight: 700 }}>Recent Summaries</div>
                         {recentSummaries.length === 0 ? (
-                            <div style={{ fontSize: 12, color: '#94a3b8' }}>No summary timeline</div>
+                            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>No summary timeline</div>
                         ) : (
                             recentSummaries.map((item) => (
                                 <div key={item.id} style={{ marginBottom: 5 }}>
-                                    <div style={{ fontSize: 10, color: '#94a3b8' }}>{item.time}</div>
-                                    <div style={{ fontSize: 12, color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.summary}</div>
+                                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>{item.time}</div>
+                                    <div style={{ fontSize: 12, color: '#f0f0f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.summary}</div>
                                 </div>
                             ))
                         )}
@@ -560,29 +580,20 @@ export default function ContextGraph({
                 fitViewOptions={{ padding: 0.2 }}
                 minZoom={0.05}
                 maxZoom={2}
-                style={{ background: '#020617' }}
+                onInit={setReactFlowInstance}
+                style={{ background: '#080808' }}
             >
-                <Background color="#1e293b" gap={24} size={1} variant={BackgroundVariant.Dots} />
-                <Controls
-                    style={{
-                        background: 'rgba(15, 23, 42, 0.6)',
-                        backdropFilter: 'blur(12px)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 12,
-                        padding: 4,
-                        boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-                    }}
-                />
+                <Background color="rgba(255,255,255,0.14)" gap={24} size={1} variant={BackgroundVariant.Dots} />
                 <MiniMap
                     nodeColor={(node) => {
-                        if (node.id.startsWith('reason')) return '#10b981';
-                        if (node.id.startsWith('file')) return '#f5576c';
-                        if (node.id.startsWith('branch')) return '#667eea';
-                        return '#4facfe';
+                        if (node.id.startsWith('reason')) return '#f0f0f0';
+                        if (node.id.startsWith('file')) return '#b4b4b4';
+                        if (node.id.startsWith('branch')) return '#8a8a8a';
+                        return '#636363';
                     }}
-                    maskColor="rgba(2, 6, 23, 0.85)"
+                    maskColor="rgba(8,8,8,0.86)"
                     style={{
-                        background: 'rgba(15, 23, 42, 0.6)',
+                        background: 'rgba(17,17,17,0.85)',
                         backdropFilter: 'blur(12px)',
                         border: '1px solid rgba(255,255,255,0.1)',
                         borderRadius: 16,
@@ -595,15 +606,13 @@ export default function ContextGraph({
                 :root {
                     color-scheme: dark;
                 }
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
                 body {
                     margin: 0;
                     padding: 0;
-                    background: #020617;
-                    color: #f8fafc;
+                    background: #080808;
+                    color: #f0f0f0;
                     overflow: hidden;
-                    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+                    font-family: var(--font-display);
                 }
 
                 .react-flow__controls-button {

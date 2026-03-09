@@ -13,7 +13,7 @@ export default function LenisProvider({ children }: { children: ReactNode }) {
                 smoothWheel: true,
             }}
         >
-            {/* @ts-ignore - legacy lenis @types/react mismatch with React 19 */}
+            {/* @ts-expect-error - legacy lenis @types/react mismatch with React 19 */}
             {children}
         </ReactLenis>
     );

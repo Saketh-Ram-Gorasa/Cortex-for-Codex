@@ -57,128 +57,70 @@ export default function AuthForm({ mode }: AuthFormProps) {
     };
 
     return (
-        <div style={{
-            width: '100%',
-            height: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'linear-gradient(135deg, #020617 0%, #0f172a 50%, #1e1b4b 100%)',
-            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-        }}>
-            <div style={{
-                background: 'rgba(15, 23, 42, 0.8)',
-                backdropFilter: 'blur(20px)',
-                border: '1px solid rgba(99, 102, 241, 0.2)',
-                borderRadius: '16px',
-                padding: '48px',
-                maxWidth: '420px',
-                width: '100%',
-                boxShadow: '0 25px 50px rgba(0, 0, 0, 0.5), 0 0 100px rgba(99, 102, 241, 0.1)',
-            }}>
-                {/* Logo */}
-                <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-                    <div style={{ fontSize: '36px', marginBottom: '8px' }}>🧠</div>
-                    <h1 style={{
-                        fontSize: '24px', fontWeight: 700, color: '#e2e8f0', margin: '0 0 4px 0', letterSpacing: '-0.5px',
-                    }}>SecondCortex</h1>
-                    <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>
-                        {mode === 'login' ? 'Welcome back' : 'Join the Neural Network'}
-                    </p>
+        <main className="sc-shell sc-auth-shell">
+            <div className="sc-auth-card">
+                <div className="sc-auth-header">
+                    <p className="sc-auth-eyebrow">SecondCortex Access</p>
+                    <h1 className="sc-auth-title">{mode === 'login' ? 'Resume Session' : 'Create Session'}</h1>
+                    <p className="sc-auth-sub">{mode === 'login' ? 'Authenticate to open your live memory graph.' : 'Create an account to start building persistent context.'}</p>
                 </div>
 
-                <form onSubmit={handleSubmit}>
-                    <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>Email</label>
-                        <input
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            placeholder="you@example.com"
-                            style={{
-                                width: '100%', padding: '12px 16px', fontSize: '14px',
-                                background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(99, 102, 241, 0.3)',
-                                borderRadius: '10px', color: '#e2e8f0', outline: 'none', boxSizing: 'border-box',
-                                marginBottom: '16px'
-                            }}
-                            required
-                        />
+                <form onSubmit={handleSubmit} className="sc-auth-form">
+                    <label className="sc-auth-label" htmlFor="auth-email">Email</label>
+                    <input
+                        id="auth-email"
+                        className="sc-auth-input"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="you@example.com"
+                        required
+                    />
 
-                        <label style={{ display: 'block', fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>Password</label>
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="••••••••"
-                            style={{
-                                width: '100%', padding: '12px 16px', fontSize: '14px',
-                                background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(99, 102, 241, 0.3)',
-                                borderRadius: '10px', color: '#e2e8f0', outline: 'none', boxSizing: 'border-box',
-                                marginBottom: mode === 'signup' ? '16px' : '0'
-                            }}
-                            required
-                        />
+                    <label className="sc-auth-label" htmlFor="auth-password">Password</label>
+                    <input
+                        id="auth-password"
+                        className="sc-auth-input"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="********"
+                        required
+                    />
 
-                        {mode === 'signup' && (
-                            <>
-                                <label style={{ display: 'block', fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>Display Name (optional)</label>
-                                <input
-                                    type="text"
-                                    value={displayName}
-                                    onChange={(e) => setDisplayName(e.target.value)}
-                                    placeholder="Your Name"
-                                    style={{
-                                        width: '100%', padding: '12px 16px', fontSize: '14px',
-                                        background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(99, 102, 241, 0.3)',
-                                        borderRadius: '10px', color: '#e2e8f0', outline: 'none', boxSizing: 'border-box'
-                                    }}
-                                />
-                            </>
-                        )}
-                    </div>
-
-                    {error && (
-                        <div style={{
-                            padding: '10px 14px', fontSize: '13px', color: '#f87171',
-                            background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)',
-                            borderRadius: '8px', marginBottom: '16px',
-                        }}>
-                            {error}
-                        </div>
+                    {mode === 'signup' && (
+                        <>
+                            <label className="sc-auth-label" htmlFor="auth-display-name">Display Name (optional)</label>
+                            <input
+                                id="auth-display-name"
+                                className="sc-auth-input"
+                                type="text"
+                                value={displayName}
+                                onChange={(e) => setDisplayName(e.target.value)}
+                                placeholder="Your Name"
+                            />
+                        </>
                     )}
 
-                    <button
-                        type="submit"
-                        disabled={isLoading}
-                        style={{
-                            width: '100%', padding: '12px', fontSize: '14px', fontWeight: 600,
-                            background: isLoading ? 'rgba(99, 102, 241, 0.3)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                            color: '#fff', border: 'none', borderRadius: '10px',
-                            cursor: isLoading ? 'wait' : 'pointer', letterSpacing: '0.3px', marginTop: '8px'
-                        }}
-                    >
-                        {isLoading ? 'Please wait…' : (mode === 'login' ? 'Log In' : 'Create Account')}
+                    {error && <div className="sc-auth-error">{error}</div>}
+
+                    <button type="submit" disabled={isLoading} className="btn-primary sc-auth-submit">
+                        {isLoading ? 'Please wait...' : mode === 'login' ? 'Log In' : 'Create Account'}
                     </button>
                 </form>
 
-                <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#64748b' }}>
+                <p className="sc-auth-switch">
                     {mode === 'login' ? (
                         <>
-                            Don't have an account?{' '}
-                            <Link href="/signup" style={{ color: '#8b5cf6', textDecoration: 'none', fontWeight: 500 }}>
-                                Sign up
-                            </Link>
+                            Don&apos;t have an account? <Link href="/signup">Sign up</Link>
                         </>
                     ) : (
                         <>
-                            Already have an account?{' '}
-                            <Link href="/login" style={{ color: '#8b5cf6', textDecoration: 'none', fontWeight: 500 }}>
-                                Log in
-                            </Link>
+                            Already have an account? <Link href="/login">Log in</Link>
                         </>
                     )}
-                </div>
+                </p>
             </div>
-        </div>
+        </main>
     );
 }

@@ -51,7 +51,7 @@ export class EventCapture {
             }
 
             this.debouncer.touch(filePath, () => {
-                this.captureAndShip(editor).catch((err) => {
+                this.captureDocumentAndShip(editor.document).catch((err) => {
                     this.output.appendLine(`[EventCapture] Error capturing snapshot: ${err}`);
                 });
             });
@@ -79,12 +79,13 @@ export class EventCapture {
             if (!enabled || e.document.uri.scheme !== 'file') { return; }
 
             const filePath = e.document.uri.fsPath;
+            const docUri = e.document.uri.toString();
             if (this.firewall.isIgnored(filePath)) { return; }
 
             this.debouncer.touch(filePath, () => {
-                const editor = vscode.window.activeTextEditor;
-                if (editor && editor.document.uri.fsPath === filePath) {
-                    this.captureAndShip(editor).catch((err) => {
+                const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === docUri);
+                if (doc && !doc.isClosed) {
+                    this.captureDocumentAndShip(doc).catch((err) => {
                         this.output.appendLine(`[EventCapture] Error capturing snapshot: ${err}`);
                     });
                 }
@@ -92,11 +93,43 @@ export class EventCapture {
         });
         this.disposables.push(changeSub);
 
+        // ── Save events (immediate capture) ───────────────────────
+        const saveSub = vscode.workspace.onDidSaveTextDocument((doc) => {
+            const enabled = vscode.workspace.getConfiguration('secondcortex').get<boolean>('captureEnabled', true);
+            if (!enabled || doc.uri.scheme !== 'file') { return; }
+
+            const filePath = doc.uri.fsPath;
+            if (this.firewall.isIgnored(filePath)) { return; }
+
+            this.captureDocumentAndShip(doc).catch((err) => {
+                this.output.appendLine(`[EventCapture] Error capturing saved snapshot: ${err}`);
+            });
+        });
+        this.disposables.push(saveSub);
+
+        // ── Background flush (works even when sidebar is closed) ──
+        const flushInterval = setInterval(() => {
+            this.cache.flushToBackend(this.backend).catch((err) => {
+                this.output.appendLine(`[EventCapture] Background cache flush error: ${err}`);
+            });
+        }, 15000);
+        this.disposables.push(new vscode.Disposable(() => clearInterval(flushInterval)));
+
+        // Also flush whenever VS Code regains focus.
+        const focusSub = vscode.window.onDidChangeWindowState((state) => {
+            if (!state.focused) {
+                return;
+            }
+            this.cache.flushToBackend(this.backend).catch((err) => {
+                this.output.appendLine(`[EventCapture] Focus-triggered cache flush error: ${err}`);
+            });
+        });
+        this.disposables.push(focusSub);
+
         context.subscriptions.push(...this.disposables);
     }
 
-    private async captureAndShip(editor: vscode.TextEditor): Promise<void> {
-        const doc = editor.document;
+    private async captureDocumentAndShip(doc: vscode.TextDocument): Promise<void> {
         const rawContent = doc.getText();
 
         // ── Semantic Firewall: scrub secrets ──────────────────────

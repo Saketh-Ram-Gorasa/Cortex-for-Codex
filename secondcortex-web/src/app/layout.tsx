@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import LenisProvider from "@/components/landing/LenisProvider";
+import CursorLayer from "@/components/CursorLayer";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,6 +31,7 @@ export default function RootLayout({
       >
         <LenisProvider>
           {children}
+          <CursorLayer />
         </LenisProvider>
       </body>
     </html>

@@ -2,7 +2,7 @@
   "name": "secondcortex",
   "displayName": "SecondCortex",
   "description": "Your AI-Powered Second Brain for Development Context — tracks IDE activity, enforces a Semantic Firewall, and enables Workspace Resurrection.",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "publisher": "secondcortex-labs",
   "repository": {
     "type": "git",
@@ -109,7 +109,11 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "vsix": "npx @vscode/vsce package --allow-star-activation",
+    "publish:patch": "npx @vscode/vsce publish patch --allow-star-activation",
+    "publish:minor": "npx @vscode/vsce publish minor --allow-star-activation",
+    "publish:major": "npx @vscode/vsce publish major --allow-star-activation"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

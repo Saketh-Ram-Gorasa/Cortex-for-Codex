@@ -4,7 +4,6 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { Float } from "@react-three/drei";
 import { useRef, useEffect } from "react";
 import * as THREE from "three";
-import { gsap } from "gsap";
 
 // Procedurally generated geometric 'Brain' placeholder mapped to a sphere
 function ProceduralBrain() {

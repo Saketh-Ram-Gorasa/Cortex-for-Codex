@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { gsap } from "gsap";
 
 export default function Navbar() {
     const [scrolled, setScrolled] = useState(false);

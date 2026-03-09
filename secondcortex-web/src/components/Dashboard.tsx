@@ -26,19 +26,27 @@ export default function Dashboard({
     const [isGenerating, setIsGenerating] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
 
     const fetchStats = useCallback(async () => {
         try {
-            const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1`, {
+            const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
                 const data = await res.json();
                 if (data.timeline && data.timeline.length > 0) {
+                    const latest = data.timeline[data.timeline.length - 1];
                     setStats(prev => ({
                         ...prev,
-                        totalSnapshots: data.total || data.timeline.length, // Fallback if total isn't provided
-                        lastSnapshotTime: data.timeline[0].timestamp
+                        totalSnapshots: data.timeline.length,
+                        lastSnapshotTime: latest?.timestamp ?? null,
+                    }));
+                } else {
+                    setStats(prev => ({
+                        ...prev,
+                        totalSnapshots: 0,
+                        lastSnapshotTime: null,
                     }));
                 }
             }
@@ -66,6 +74,8 @@ export default function Dashboard({
     useEffect(() => {
         fetchStats();
         fetchMcpKey();
+        const intervalId = window.setInterval(fetchStats, 5000);
+        return () => window.clearInterval(intervalId);
     }, [fetchStats, fetchMcpKey]);
 
     const handleGenerateKey = async () => {
@@ -83,7 +93,7 @@ export default function Dashboard({
             } else {
                 setError("Failed to generate key. Please try again.");
             }
-        } catch (err) {
+        } catch {
             setError("Connection error. Check your internet.");
         } finally {
             setIsGenerating(false);
@@ -93,75 +103,70 @@ export default function Dashboard({
     const copyToClipboard = () => {
         if (mcpKey) {
             navigator.clipboard.writeText(mcpKey);
-            alert("API Key copied to clipboard!");
+            setNotice("API key copied to clipboard.");
         }
     };
 
     return (
-        <div className="min-h-screen w-full bg-[#020617] p-8 pt-24 text-white font-sans selection:bg-indigo-500/30">
-            <div className="max-w-6xl mx-auto space-y-12">
-                {/* Header */}
-                <div className="space-y-2">
-                    <h1 className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-500">
-                        Developer Dashboard
-                    </h1>
-                    <p className="text-gray-400 text-lg">Manage your SecondCortex environment and MCP integrations.</p>
+        <div className="sc-dashboard-wrap">
+            <div className="sc-dashboard-inner">
+                <div className="sc-section-header">
+                    <p className="section-label">Control Surface</p>
+                    <h1 className="section-title">Developer Dashboard</h1>
+                    <p className="section-desc">Manage your SecondCortex memory system and external MCP integrations.</p>
                 </div>
 
-                {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="sc-stats-grid">
                     <StatCard 
                         title="Memory Snapshots" 
                         value={stats.totalSnapshots.toString()} 
                         subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(stats.lastSnapshotTime).toLocaleTimeString()}` : "No snapshots yet"} 
-                        icon="🗄️"
+                        icon="storage"
                     />
                     <StatCard 
                         title="Active Project" 
                         value={stats.activeProject} 
                         subtitle="Current workspace scope" 
-                        icon="🚀"
+                        icon="workspace"
                     />
                     <StatCard 
                         title="MCP Status" 
                         value={mcpKey ? "Connected" : "Not Linked"} 
                         subtitle={mcpKey ? "Authentication active" : "Requires API Key"} 
-                        icon="🔌"
+                        icon="connection"
                     />
                 </div>
 
-                {/* MCP Section */}
-                <div className="relative group">
-                    <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
-                    <div className="relative bg-[#0f172a]/80 border border-white/10 p-8 rounded-2xl backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-8">
-                        <div className="space-y-4 max-w-xl">
-                            <h2 className="text-2xl font-semibold flex items-center gap-3">
-                                <span className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">🔌</span>
+                <div className="sc-dashboard-panel">
+                    <div className="sc-dashboard-panel-inner">
+                        <div className="sc-dashboard-text">
+                            <h2 className="sc-dashboard-h2">
+                                <span className="sc-icon-cell"><MonoIcon kind="connection" /></span>
                                 MCP Integration (Model Context Protocol)
                             </h2>
-                            <p className="text-gray-400 leading-relaxed">
+                            <p className="sc-dashboard-p">
                                 Connect external AI assistants like Claude Desktop or Cursor to your local context memory. 
                                 Secure your connection by generating a unique API key.
                             </p>
                         </div>
-                        <div className="flex flex-col items-center gap-4 w-full md:w-auto">
+                        <div className="sc-dashboard-actions">
                             <button
                                 onClick={mcpKey ? () => setShowModal(true) : handleGenerateKey}
                                 disabled={isGenerating}
-                                className="w-full md:w-64 py-4 px-6 bg-white text-black font-bold rounded-xl hover:bg-indigo-50 transition-all active:scale-95 disabled:opacity-50 shadow-lg shadow-white/5"
+                                className="btn-primary sc-dashboard-btn"
                             >
                                 {isGenerating ? "Processing..." : mcpKey ? "View Existing Key" : "Generate MCP Key"}
                             </button>
-                            {error && <p className="text-red-400 text-sm">{error}</p>}
+                            {error && <p className="sc-auth-error">{error}</p>}
+                            {notice && <p className="sc-auth-sub">{notice}</p>}
                         </div>
                     </div>
                 </div>
 
-                {/* Integration Guide */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-                    <div className="bg-[#0f172a]/40 border border-white/5 p-6 rounded-xl space-y-4">
-                        <h3 className="font-semibold text-gray-300">Quick Start: Claude Desktop</h3>
-                        <pre className="bg-black/50 p-4 rounded-lg text-xs text-indigo-300 overflow-x-auto border border-white/5">
+                <div className="sc-guide-grid">
+                    <div className="sc-guide-card">
+                        <h3 className="sc-guide-title">Quick Start: Claude Desktop</h3>
+                        <pre className="sc-guide-code">
 {`"mcpServers": {
   "secondcortex": {
     "command": "npx",
@@ -173,9 +178,9 @@ export default function Dashboard({
 }`}
                         </pre>
                     </div>
-                    <div className="bg-[#0f172a]/40 border border-white/5 p-6 rounded-xl space-y-4">
-                        <h3 className="font-semibold text-gray-300">Integration Tips</h3>
-                        <ul className="text-sm text-gray-400 space-y-2 list-disc list-inside">
+                                        <div className="sc-guide-card">
+                                                <h3 className="sc-guide-title">Integration Tips</h3>
+                                                <ul className="sc-guide-list">
                             <li>Keep your API key private — it grants access to your memory.</li>
                             <li>You can regenerate your key at any time to revoke old ones.</li>
                             <li>Ensure your backend is awake by visiting the dashboard occasionally.</li>
@@ -186,30 +191,30 @@ export default function Dashboard({
 
             {/* Modal */}
             {showModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setShowModal(false)}></div>
-                    <div className="relative bg-[#1e293b] border border-white/10 w-full max-w-lg rounded-3xl p-8 shadow-2xl animate-in zoom-in duration-300">
-                        <div className="space-y-6">
-                            <div className="text-center space-y-2">
-                                <div className="text-4xl animate-bounce">🔑</div>
-                                <h3 className="text-2xl font-bold">Your MCP API Key</h3>
-                                <p className="text-gray-400 text-sm">Use this key to authorize external MCP clients.</p>
+                <div className="sc-modal-wrap">
+                    <div className="sc-modal-backdrop" onClick={() => setShowModal(false)} />
+                    <div className="sc-modal-card">
+                        <div className="sc-modal-stack">
+                            <div className="sc-modal-head">
+                                <div className="sc-modal-emoji"><MonoIcon kind="key" /></div>
+                                <h3 className="sc-modal-title">Your MCP API Key</h3>
+                                <p className="sc-modal-sub">Use this key to authorize external MCP clients.</p>
                             </div>
 
-                            <div className="bg-black/40 border border-white/10 p-5 rounded-2xl flex items-center justify-between gap-4 font-mono group">
-                                <span className="text-indigo-400 truncate text-lg">{mcpKey}</span>
+                            <div className="sc-modal-key">
+                                <span className="sc-modal-key-text">{mcpKey}</span>
                                 <button 
                                     onClick={copyToClipboard}
-                                    className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                                    className="btn-secondary"
                                     title="Copy to clipboard"
                                 >
-                                    📋
+                                    <MonoIcon kind="copy" />
                                 </button>
                             </div>
 
-                            <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-xl flex gap-3">
-                                <span className="text-amber-500 italic">⚠️</span>
-                                <p className="text-xs text-amber-200/70">
+                            <div className="sc-modal-warn">
+                                <span><MonoIcon kind="warning" /></span>
+                                <p>
                                     Warning: This key grants full access to your snapshot history. 
                                     Do not share it on public forums or commit it to GitHub.
                                 </p>
@@ -217,7 +222,7 @@ export default function Dashboard({
 
                             <button 
                                 onClick={() => setShowModal(false)}
-                                className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 font-bold rounded-xl transition-colors shadow-lg shadow-indigo-500/20"
+                                className="btn-primary sc-modal-close"
                             >
                                 Got it
                             </button>
@@ -229,16 +234,59 @@ export default function Dashboard({
     );
 }
 
-function StatCard({ title, value, subtitle, icon }: { title: string, value: string, subtitle: string, icon: string }) {
+function MonoIcon({ kind }: { kind: 'storage' | 'workspace' | 'connection' | 'key' | 'copy' | 'warning' }) {
+    const baseProps = {
+        width: 16,
+        height: 16,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.3,
+        strokeLinecap: 'round' as const,
+        strokeLinejoin: 'round' as const,
+        'aria-hidden': true,
+    };
+
+    if (kind === 'storage') {
+        return (
+            <svg {...baseProps}><ellipse cx="8" cy="3.5" rx="5.5" ry="2.2" /><path d="M2.5 3.5v6.2c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V3.5" /><path d="M2.5 6.6c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2" /></svg>
+        );
+    }
+    if (kind === 'workspace') {
+        return (
+            <svg {...baseProps}><rect x="2.3" y="3" width="11.4" height="10" rx="1.4" /><path d="M2.3 6.2h11.4" /><path d="M5 9h2.5" /></svg>
+        );
+    }
+    if (kind === 'connection') {
+        return (
+            <svg {...baseProps}><path d="M5.1 4.4h2.2a2 2 0 0 1 0 4H5.1" /><path d="M10.9 11.6H8.7a2 2 0 1 1 0-4h2.2" /><path d="M6.3 8h3.4" /></svg>
+        );
+    }
+    if (kind === 'key') {
+        return (
+            <svg {...baseProps}><circle cx="5.4" cy="8" r="2.3" /><path d="M7.7 8h5.8" /><path d="M11.2 8v2" /><path d="M13 8v1.2" /></svg>
+        );
+    }
+    if (kind === 'copy') {
+        return (
+            <svg {...baseProps}><rect x="5" y="4" width="8" height="9" rx="1" /><path d="M3 10V3.8A.8.8 0 0 1 3.8 3H10" /></svg>
+        );
+    }
     return (
-        <div className="bg-[#0f172a]/50 border border-white/5 p-6 rounded-2xl space-y-4 hover:border-white/10 hover:bg-[#0f172a]/70 transition-all group">
-            <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-500 uppercase tracking-wider">{title}</span>
-                <span className="text-2xl group-hover:scale-125 transition-transform duration-500">{icon}</span>
+        <svg {...baseProps}><path d="M8 2.2 13.3 12H2.7L8 2.2Z" /><path d="M8 6v2.8" /><circle cx="8" cy="10.7" r=".7" fill="currentColor" stroke="none" /></svg>
+    );
+}
+
+function StatCard({ title, value, subtitle, icon }: { title: string, value: string, subtitle: string, icon: 'storage' | 'workspace' | 'connection' }) {
+    return (
+        <div className="sc-stat-card">
+            <div className="sc-stat-head">
+                <span className="sc-stat-title">{title}</span>
+                <span className="sc-icon-cell"><MonoIcon kind={icon} /></span>
             </div>
-            <div className="space-y-1">
-                <div className="text-3xl font-bold">{value}</div>
-                <div className="text-xs text-gray-500">{subtitle}</div>
+            <div>
+                <div className="sc-stat-value">{value}</div>
+                <div className="sc-stat-sub">{subtitle}</div>
             </div>
         </div>
     );
