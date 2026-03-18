@@ -64,13 +64,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'ask': {
-                    const question = message.question as string;
+                    const rawQuestion = message.question as string;
+                    const question = this.rewriteMultiSnapshotQuestion(rawQuestion);
                     let sessionId = message.sessionId as string | undefined;
-                    this.output.appendLine(`[Sidebar] User asked: ${question} (session: ${sessionId})`);
+                    this.output.appendLine(`[Sidebar] User asked: ${rawQuestion} (session: ${sessionId})`);
+                    if (question !== rawQuestion) {
+                        this.output.appendLine(`[Sidebar] Rewrote query to avoid latest-snapshot fast path: ${question}`);
+                    }
 
                     // Ensure chats are always attached to a session so they appear in "Past Chats".
                     if (!sessionId) {
-                        const autoTitle = (question || 'New Chat').trim().slice(0, 48) || 'New Chat';
+                        const autoTitle = (rawQuestion || 'New Chat').trim().slice(0, 48) || 'New Chat';
                         const createdSessionId = await this.backend.createChatSession(autoTitle);
                         if (createdSessionId) {
                             sessionId = createdSessionId;
@@ -78,7 +82,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         }
                     }
 
-                    const normalized = (question || '').trim().toLowerCase();
+                    const normalized = (rawQuestion || '').trim().toLowerCase();
                     const openShadowGraphIntent =
                         normalized.includes('open shadow graph') ||
                         normalized.includes('show shadow graph') ||
@@ -217,6 +221,52 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         return lines;
+    }
+
+    private rewriteMultiSnapshotQuestion(question: string): string {
+        const raw = (question || '').trim();
+        if (!raw) {
+            return raw;
+        }
+
+        const lower = raw.toLowerCase();
+        const count = this.extractSnapshotCount(lower);
+        const asksForSummary = /\b(summarize|summary|recap|review|timeline|what was i doing)\b/.test(lower);
+        if (count === null || !asksForSummary) {
+            return raw;
+        }
+
+        // Avoid backend single-latest fast path words (last/recent/current/latest).
+        return `Summarize the previous ${count} snapshot entries in chronological order. Explain what I was working on, key file changes, and main decisions.`;
+    }
+
+    private extractSnapshotCount(lowerQuestion: string): number | null {
+        const numericMatch = lowerQuestion.match(/\blast\s+(\d+)\s+snapshots?\b/);
+        if (numericMatch?.[1]) {
+            const parsed = Number.parseInt(numericMatch[1], 10);
+            if (Number.isFinite(parsed) && parsed > 0) {
+                return Math.min(parsed, 20);
+            }
+        }
+
+        const wordMatch = lowerQuestion.match(/\blast\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+snapshots?\b/);
+        if (!wordMatch?.[1]) {
+            return null;
+        }
+
+        const wordToNumber: Record<string, number> = {
+            one: 1,
+            two: 2,
+            three: 3,
+            four: 4,
+            five: 5,
+            six: 6,
+            seven: 7,
+            eight: 8,
+            nine: 9,
+            ten: 10,
+        };
+        return wordToNumber[wordMatch[1]] ?? null;
     }
 
     private getHtml(loggedIn: boolean, user?: { userId: string; email: string; displayName: string }): string {
@@ -913,29 +963,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             for (let i = 0; i < parts.length; i++) {
                 if (i % 2 === 1) {
-                    html += '<pre><code>' + escapeHtml(parts[i].replace(/^\n/, '').replace(/\n$/, '')) + '</code></pre>';
+                    html += '<pre><code>' + escapeHtml(parts[i].replace(/^\\n/, '').replace(/\\n$/, '')) + '</code></pre>';
                     continue;
                 }
 
-                const blocks = parts[i].split(/\n\n+/);
+                const blocks = parts[i].split(/\\n\\n+/);
                 for (const block of blocks) {
                     const trimmed = block.trim();
                     if (!trimmed) continue;
 
-                    const lines = trimmed.split('\n');
-                    const isList = lines.every(line => /^[-*]\s+/.test(line.trim()));
+                    const lines = trimmed.split('\\n');
+                    const isList = lines.every(line => /^[-*]\\s+/.test(line.trim()));
 
                     if (isList) {
                         const items = lines
-                            .map(line => line.trim().replace(/^[-*]\s+/, ''))
+                            .map(line => line.trim().replace(/^[-*]\\s+/, ''))
                             .map(item => '<li>' + formatInline(item) + '</li>')
                             .join('');
                         html += '<ul>' + items + '</ul>';
                         continue;
                     }
 
-                    if (/^#{1,3}\s+/.test(trimmed)) {
-                        const heading = trimmed.replace(/^#{1,3}\s+/, '');
+                    if (/^#{1,3}\\s+/.test(trimmed)) {
+                        const heading = trimmed.replace(/^#{1,3}\\s+/, '');
                         html += '<h3>' + formatInline(heading) + '</h3>';
                         continue;
                     }

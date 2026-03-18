@@ -10,7 +10,7 @@ export interface SyncSnapshotRowPayload {
     git_branch: string | null;
     terminal_commands: string;
     summary: string;
-    enriched_context?: string;
+    enriched_context: string;
     timestamp: number;
     synced: number;
 }
@@ -216,55 +216,6 @@ export class BackendClient {
             return (await res.json()) as { commands: unknown[] };
         } catch (err) {
             this.output.appendLine(`[BackendClient] Network error requesting resurrection: ${err}`);
-            return null;
-        }
-    }
-
-    /** Trigger retroactive git ingestion to backfill memory from existing repository history. */
-    async ingestGitHistory(payload: {
-        repoPath?: string;
-        maxCommits?: number;
-        maxPullRequests?: number;
-        includePullRequests?: boolean;
-    }): Promise<{
-        status: string;
-        repo: string;
-        branch: string;
-        ingestedCount: number;
-        commitCount: number;
-        prCount: number;
-        commentCount: number;
-        skippedCount: number;
-        warnings: string[];
-    } | null> {
-        try {
-            const res = await fetch(`${this.baseUrl}/api/v1/ingest/git`, {
-                method: 'POST',
-                headers: await this.getHeaders(),
-                body: JSON.stringify(payload),
-            });
-            if (res.status === 401) {
-                await this.handle401();
-                return null;
-            }
-            if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                this.output.appendLine(`[BackendClient] Git ingest failed: ${res.status} ${res.statusText} ${text}`);
-                return null;
-            }
-            return (await res.json()) as {
-                status: string;
-                repo: string;
-                branch: string;
-                ingestedCount: number;
-                commitCount: number;
-                prCount: number;
-                commentCount: number;
-                skippedCount: number;
-                warnings: string[];
-            };
-        } catch (err) {
-            this.output.appendLine(`[BackendClient] Network error requesting git ingest: ${err}`);
             return null;
         }
     }

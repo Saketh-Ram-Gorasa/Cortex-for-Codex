@@ -54,16 +54,19 @@ export class WorkspaceResurrector {
                         if (cmd.filePath) {
                             const userChoice = await vscode.window.showInformationMessage(
                                 `Session target belongs to a different workspace: ${cmd.filePath}. Open it?`,
+                                'Reuse Current Window',
                                 'Open in New Window',
                                 'Cancel'
                             );
-                            if (userChoice === 'Open in New Window') {
+                            if (userChoice === 'Reuse Current Window') {
                                 const uri = vscode.Uri.file(cmd.filePath);
-                                // The true argument here forces opening the folder in a new window natively
+                                await vscode.commands.executeCommand('vscode.openFolder', uri, false);
+                            } else if (userChoice === 'Open in New Window') {
+                                const uri = vscode.Uri.file(cmd.filePath);
                                 await vscode.commands.executeCommand('vscode.openFolder', uri, true);
                             }
                         }
-                        return; // Abort remaining commands in this window. The new window will take over context.
+                        return; // Abort remaining commands in this window once workspace switch is handled.
                     }
 
                     case 'git_stash':

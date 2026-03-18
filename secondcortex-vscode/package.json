@@ -57,10 +57,6 @@
         "title": "SecondCortex: Ask a Question"
       },
       {
-        "command": "secondcortex.ingestGitHistory",
-        "title": "SecondCortex: Ingest Git History"
-      },
-      {
         "command": "secondcortex.toggleCapture",
         "title": "SecondCortex: Toggle Context Capture"
       },
@@ -104,6 +100,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable or disable automatic context capture."
+        },
+        "secondcortex.enablePowerSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable PowerSync local queue transport. Keep disabled unless you explicitly want PowerSync mode."
         }
       }
     }

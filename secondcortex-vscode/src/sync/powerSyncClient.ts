@@ -52,7 +52,7 @@ export class PowerSyncClient {
         gitBranch: string | null;
         terminalCommands: string[];
         summary: string;
-        enrichedContext: Record<string, unknown> | null;
+        enrichedContext: string;
         timestampMs: number;
     }): PowerSyncSnapshotRow {
         return {
@@ -64,7 +64,7 @@ export class PowerSyncClient {
             git_branch: params.gitBranch,
             terminal_commands: JSON.stringify(params.terminalCommands || []),
             summary: params.summary,
-            enriched_context: JSON.stringify(params.enrichedContext || {}),
+            enriched_context: params.enrichedContext || '{}',
             timestamp: params.timestampMs,
             synced: 0,
         };
@@ -186,7 +186,7 @@ export class PowerSyncClient {
     private getPendingRows(limit: number): PowerSyncSnapshotRow[] {
         const stmt = this.db.prepare(`
             SELECT id, user_id, team_id, workspace, active_file, git_branch,
-                     terminal_commands, summary, enriched_context, timestamp, synced
+                   terminal_commands, summary, enriched_context, timestamp, synced
             FROM snapshots
             WHERE synced = 0
             ORDER BY timestamp ASC
