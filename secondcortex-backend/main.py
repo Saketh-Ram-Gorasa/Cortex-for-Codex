@@ -217,8 +217,26 @@ def _is_latest_snapshot_question(question: str) -> bool:
     q = (question or "").strip().lower()
     if not q:
         return False
-    has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
-    has_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|edited|editing|file|commit|branch)\b", q))
+
+    # Multi-snapshot analysis should NOT take the single-latest fast path.
+    has_multi_snapshot_intent = (
+        bool(re.search(r"\b(last|recent|past)\s+\d+\s+snapshots?\b", q))
+        or bool(re.search(r"\b(last|recent|past)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+snapshots?\b", q))
+        or bool(re.search(r"\b(summarize|summary|compare|across|history|timeline)\b", q))
+    )
+    if has_multi_snapshot_intent:
+        return False
+
+    has_recency = bool(
+        re.search(
+            r"\b("
+            r"latest|newest|most recent|current|fetch latest|"
+            r"last snapshot|recent snapshot"
+            r")\b",
+            q,
+        )
+    )
+    has_context = bool(re.search(r"\b(snapshot|context|edited|editing|file|commit|branch)\b", q))
     return has_recency and has_context
 
 
