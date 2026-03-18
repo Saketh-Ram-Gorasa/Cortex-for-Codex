@@ -1,6 +1,19 @@
 import * as vscode from 'vscode';
 import { AuthService } from './auth/authService';
 
+export interface SyncSnapshotRowPayload {
+    id: string;
+    user_id: string;
+    team_id: string | null;
+    workspace: string;
+    active_file: string;
+    git_branch: string | null;
+    terminal_commands: string;
+    summary: string;
+    timestamp: number;
+    synced: number;
+}
+
 /**
  * BackendClient – HTTP client for communicating with the SecondCortex FastAPI backend.
  * Sends an Authorization: Bearer <JWT> header for per-user authentication.
@@ -72,6 +85,64 @@ export class BackendClient {
         } catch (err) {
             this.output.appendLine(`[BackendClient] Network error sending snapshot: ${err}`);
             return false;
+        }
+    }
+
+    async getSyncAuth(): Promise<{ token: string; user_id: string; team_id: string | null; checkpoint: number } | null> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/sync/auth`, {
+                method: 'GET',
+                headers: await this.getHeaders(),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Sync auth failed: ${res.status} ${res.statusText}`);
+                return null;
+            }
+            return await res.json() as { token: string; user_id: string; team_id: string | null; checkpoint: number };
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error fetching sync auth: ${err}`);
+            return null;
+        }
+    }
+
+    async putSyncRows(
+        rows: SyncSnapshotRowPayload[],
+        syncToken: string,
+    ): Promise<{ success: boolean; status: number; syncedIds: string[]; checkpoint: number | null }> {
+        try {
+            const headers = await this.getHeaders();
+            headers['X-Sync-Token'] = syncToken;
+
+            const res = await fetch(`${this.baseUrl}/api/sync/data`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({ rows }),
+            });
+
+            if (res.status === 401) {
+                await this.handle401();
+                return { success: false, status: 401, syncedIds: [], checkpoint: null };
+            }
+
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Sync data upload failed: ${res.status} ${res.statusText}`);
+                return { success: false, status: res.status, syncedIds: [], checkpoint: null };
+            }
+
+            const data = await res.json() as { synced_ids?: string[]; checkpoint?: number };
+            return {
+                success: true,
+                status: res.status,
+                syncedIds: data.synced_ids || [],
+                checkpoint: data.checkpoint ?? null,
+            };
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error uploading sync rows: ${err}`);
+            return { success: false, status: 0, syncedIds: [], checkpoint: null };
         }
     }
 

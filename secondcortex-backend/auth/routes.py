@@ -24,6 +24,7 @@ class SignupRequest(BaseModel):
     email: str
     password: str
     display_name: str = ""
+    team_id: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -36,6 +37,7 @@ class AuthResponse(BaseModel):
     user_id: str
     email: str
     display_name: str
+    team_id: str | None = None
 
 
 class MCPKeyResponse(BaseModel):
@@ -48,7 +50,7 @@ async def signup(req: SignupRequest):
     if len(req.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
 
-    user = user_db.create_user(req.email, req.password, req.display_name)
+    user = user_db.create_user(req.email, req.password, req.display_name, req.team_id)
     if user is None:
         raise HTTPException(status_code=409, detail="An account with that email already exists.")
 
@@ -60,6 +62,7 @@ async def signup(req: SignupRequest):
         user_id=user["id"],
         email=user["email"],
         display_name=user["display_name"],
+        team_id=user.get("team_id"),
     )
 
 
@@ -78,6 +81,7 @@ async def login(req: LoginRequest):
         user_id=user["id"],
         email=user["email"],
         display_name=user["display_name"],
+        team_id=user.get("team_id"),
     )
 
 

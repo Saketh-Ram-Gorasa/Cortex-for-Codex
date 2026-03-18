@@ -9,9 +9,36 @@ import { ShadowGraphPanel } from './webview/shadowGraphPanel';
 import { BackendClient } from './backendClient';
 import { AuthService } from './auth/authService';
 import { registerDecisionArchaeology } from './decision/decisionHover';
+import { PowerSyncClient, SyncStatus } from './sync/powerSyncClient';
 
 let eventCapture: EventCapture | undefined;
 let snapshotCache: SnapshotCache | undefined;
+let powerSyncClient: PowerSyncClient | undefined;
+let syncStatusBar: vscode.StatusBarItem | undefined;
+
+function renderSyncStatus(status: SyncStatus): void {
+    if (!syncStatusBar) {
+        return;
+    }
+
+    if (status.state === 'synced') {
+        syncStatusBar.text = '$(check) SecondCortex: Synced';
+        syncStatusBar.color = new vscode.ThemeColor('charts.green');
+        syncStatusBar.tooltip = 'SecondCortex sync is up to date';
+        return;
+    }
+
+    if (status.state === 'syncing') {
+        syncStatusBar.text = `$(sync~spin) SecondCortex: Syncing... (${status.pending} pending)`;
+        syncStatusBar.color = new vscode.ThemeColor('charts.yellow');
+        syncStatusBar.tooltip = 'SecondCortex is syncing pending snapshots';
+        return;
+    }
+
+    syncStatusBar.text = `$(cloud-offline) SecondCortex: Offline — ${status.pending} queued`;
+    syncStatusBar.color = new vscode.ThemeColor('disabledForeground');
+    syncStatusBar.tooltip = 'SecondCortex is offline. Local queue will sync when connectivity resumes';
+}
 
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('SecondCortex');
@@ -31,14 +58,20 @@ export function activate(context: vscode.ExtensionContext) {
     const backendClient = new BackendClient(backendUrl, outputChannel);
     backendClient.setAuthService(authService);
 
+    syncStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    syncStatusBar.name = 'SecondCortex Sync';
+    syncStatusBar.show();
+    context.subscriptions.push(syncStatusBar);
+
     const firewall = new SemanticFirewall(outputChannel);
     const debouncer = new Debouncer(debouncerDelayMs, noiseThresholdMs);
     snapshotCache = new SnapshotCache(context.globalStorageUri.fsPath, outputChannel);
+    powerSyncClient = new PowerSyncClient(context.globalStorageUri.fsPath, backendClient, outputChannel, renderSyncStatus);
     const resurrector = new WorkspaceResurrector(outputChannel);
     const shadowGraphPanel = new ShadowGraphPanel(backendClient, resurrector, outputChannel, frontendUrl);
 
     // ── Data Capture ───────────────────────────────────────────────
-    eventCapture = new EventCapture(debouncer, firewall, snapshotCache, backendClient, outputChannel);
+    eventCapture = new EventCapture(debouncer, firewall, snapshotCache, powerSyncClient, backendClient, authService, outputChannel);
     eventCapture.register(context);
 
     // ── Webview Sidebar ────────────────────────────────────────────
@@ -49,6 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // ── Decision Archaeology Hover ───────────────────────────────
     registerDecisionArchaeology(context, backendClient);
+    outputChannel.appendLine('[SecondCortex] Decision Archaeology hover provider registered.');
 
     // ── Commands ───────────────────────────────────────────────────
     context.subscriptions.push(
@@ -111,6 +145,9 @@ export function activate(context: vscode.ExtensionContext) {
     snapshotCache.flushToBackend(backendClient).catch((err) => {
         outputChannel.appendLine(`[SecondCortex] Offline sync error: ${err}`);
     });
+    powerSyncClient.syncPending().catch((err) => {
+        outputChannel.appendLine(`[SecondCortex] PowerSync bootstrap error: ${err}`);
+    });
 
     outputChannel.appendLine('[SecondCortex] Extension activated successfully.');
 }
@@ -118,4 +155,5 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
     eventCapture?.dispose();
     snapshotCache?.close();
+    powerSyncClient?.close();
 }

@@ -6,7 +6,7 @@ based on the configured provider (GitHub Models vs Azure OpenAI).
 from __future__ import annotations
 
 import logging
-from openai import OpenAI, AzureOpenAI
+from openai import OpenAI, AzureOpenAI, AsyncOpenAI, AsyncAzureOpenAI
 from config import settings
 
 logger = logging.getLogger("secondcortex.llm")
@@ -25,6 +25,23 @@ def create_llm_client() -> OpenAI:
     else:
         logger.info("Using Azure OpenAI (endpoint: %s)", settings.azure_openai_endpoint)
         return AzureOpenAI(
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            api_version=settings.azure_openai_api_version,
+        )
+
+
+def create_async_llm_client() -> AsyncOpenAI | AsyncAzureOpenAI:
+    """Return an async OpenAI-compatible client based on the configured provider."""
+    if settings.llm_provider == "github_models":
+        logger.debug("Creating async GitHub Models client")
+        return AsyncOpenAI(
+            base_url=settings.github_models_endpoint,
+            api_key=settings.github_token,
+        )
+    else:
+        logger.debug("Creating async Azure OpenAI client")
+        return AsyncAzureOpenAI(
             azure_endpoint=settings.azure_openai_endpoint,
             api_key=settings.azure_openai_api_key,
             api_version=settings.azure_openai_api_version,

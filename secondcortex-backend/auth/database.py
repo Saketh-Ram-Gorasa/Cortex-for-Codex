@@ -61,6 +61,7 @@ class UserDB:
                     email TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     password_salt TEXT NOT NULL,
+                    team_id TEXT,
                     display_name TEXT NOT NULL DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     mcp_api_key TEXT UNIQUE
@@ -71,6 +72,10 @@ class UserDB:
                 conn.execute("ALTER TABLE users ADD COLUMN mcp_api_key TEXT")
             except sqlite3.OperationalError:
                 # Column already exists
+                pass
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN team_id TEXT")
+            except sqlite3.OperationalError:
                 pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -92,6 +97,26 @@ class UserDB:
                     FOREIGN KEY (user_id) REFERENCES users (id),
                     FOREIGN KEY (session_id) REFERENCES chat_sessions (id)
                 )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS synced_snapshots (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    team_id TEXT,
+                    workspace TEXT NOT NULL,
+                    active_file TEXT NOT NULL,
+                    git_branch TEXT,
+                    terminal_commands TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    synced INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_synced_snapshots_scope
+                ON synced_snapshots (team_id, user_id, timestamp DESC)
             """)
             conn.commit()
 
@@ -155,7 +180,7 @@ class UserDB:
             conn.commit()
 
 
-    def create_user(self, email: str, password: str, display_name: str = "") -> dict | None:
+    def create_user(self, email: str, password: str, display_name: str = "", team_id: str | None = None) -> dict | None:
         """Create a new user. Returns user dict or None if email already exists."""
         email = email.lower().strip()
         user_id = str(uuid.uuid4())[:8]  # Short user ID for collection namespacing
@@ -164,12 +189,17 @@ class UserDB:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(
-                    "INSERT INTO users (id, email, password_hash, password_salt, display_name) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, email, pw_hash, salt, display_name or email.split("@")[0]),
+                    "INSERT INTO users (id, email, password_hash, password_salt, display_name, team_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, email, pw_hash, salt, display_name or email.split("@")[0], team_id),
                 )
                 conn.commit()
             logger.info("Created user: %s (%s)", user_id, email)
-            return {"id": user_id, "email": email, "display_name": display_name or email.split("@")[0]}
+            return {
+                "id": user_id,
+                "email": email,
+                "display_name": display_name or email.split("@")[0],
+                "team_id": team_id,
+            }
         except sqlite3.IntegrityError:
             logger.warning("User already exists: %s", email)
             return None
@@ -179,28 +209,127 @@ class UserDB:
         email = email.lower().strip()
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT id, email, password_hash, password_salt, display_name FROM users WHERE email = ?",
+                "SELECT id, email, password_hash, password_salt, display_name, team_id FROM users WHERE email = ?",
                 (email,),
             ).fetchone()
 
         if row is None:
             return None
 
-        user_id, user_email, stored_hash, salt, display_name = row
+        user_id, user_email, stored_hash, salt, display_name, team_id = row
         if _verify_password(password, stored_hash, salt):
-            return {"id": user_id, "email": user_email, "display_name": display_name}
+            return {"id": user_id, "email": user_email, "display_name": display_name, "team_id": team_id}
         return None
 
     def get_user_by_id(self, user_id: str) -> dict | None:
         """Lookup a user by ID."""
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT id, email, display_name FROM users WHERE id = ?",
+                "SELECT id, email, display_name, team_id FROM users WHERE id = ?",
                 (user_id,),
             ).fetchone()
         if row:
-            return {"id": row[0], "email": row[1], "display_name": row[2]}
+            return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
         return None
+
+    def get_team_member_ids(self, user_id: str) -> list[str]:
+        """Return all user IDs visible to this user by team scope rules."""
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return []
+
+        team_id = user.get("team_id")
+        with sqlite3.connect(self.db_path) as conn:
+            if team_id:
+                rows = conn.execute(
+                    "SELECT id FROM users WHERE team_id = ? ORDER BY created_at DESC",
+                    (team_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id FROM users WHERE id = ?",
+                    (user_id,),
+                ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def upsert_synced_snapshot(self, row: dict) -> None:
+        """Store one synced snapshot row in raw storage table."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO synced_snapshots (
+                    id, user_id, team_id, workspace, active_file, git_branch,
+                    terminal_commands, summary, timestamp, synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    team_id=excluded.team_id,
+                    workspace=excluded.workspace,
+                    active_file=excluded.active_file,
+                    git_branch=excluded.git_branch,
+                    terminal_commands=excluded.terminal_commands,
+                    summary=excluded.summary,
+                    timestamp=excluded.timestamp,
+                    synced=excluded.synced
+                """,
+                (
+                    row.get("id"),
+                    row.get("user_id"),
+                    row.get("team_id"),
+                    row.get("workspace"),
+                    row.get("active_file"),
+                    row.get("git_branch"),
+                    row.get("terminal_commands") or "[]",
+                    row.get("summary") or "",
+                    int(row.get("timestamp") or 0),
+                    int(row.get("synced") or 0),
+                ),
+            )
+            conn.commit()
+
+    def get_team_snapshots(self, user_id: str, per_member_limit: int = 500) -> list[dict]:
+        """Return team-scoped snapshots, capped per member, newest first."""
+        member_ids = self.get_team_member_ids(user_id)
+        if not member_ids:
+            return []
+
+        all_rows: list[dict] = []
+        with sqlite3.connect(self.db_path) as conn:
+            for member_id in member_ids:
+                cursor = conn.execute(
+                    """
+                    SELECT id, user_id, team_id, workspace, active_file, git_branch,
+                           terminal_commands, summary, timestamp, synced
+                    FROM synced_snapshots
+                    WHERE user_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (member_id, per_member_limit),
+                )
+                for row in cursor.fetchall():
+                    all_rows.append({
+                        "id": row[0],
+                        "user_id": row[1],
+                        "team_id": row[2],
+                        "workspace": row[3],
+                        "active_file": row[4],
+                        "git_branch": row[5],
+                        "terminal_commands": row[6],
+                        "summary": row[7],
+                        "timestamp": row[8],
+                        "synced": row[9],
+                    })
+
+        all_rows.sort(key=lambda r: int(r.get("timestamp") or 0), reverse=True)
+        return all_rows
+
+    def get_sync_checkpoint(self, user_id: str) -> int:
+        """Checkpoint = max timestamp visible to user in team scope."""
+        snapshots = self.get_team_snapshots(user_id=user_id, per_member_limit=500)
+        if not snapshots:
+            return 0
+        return max(int(s.get("timestamp") or 0) for s in snapshots)
 
     def generate_mcp_api_key(self, user_id: str) -> str:
         """Generate a new MCP API key for the user and save it."""

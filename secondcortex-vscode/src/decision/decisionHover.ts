@@ -3,11 +3,11 @@ import { BackendClient } from '../backendClient';
 import { BackgroundPrefetcher } from './backgroundPrefetcher';
 import { DecisionCache } from './decisionCache';
 import { runGitBlame } from './gitBlame';
-import { formatHover, formatPartialHover } from './hoverFormatter';
+import { formatHover, formatUnavailableHover } from './hoverFormatter';
 import { RequestDeduplicator } from './requestDeduplicator';
 import { fetchAndCacheDecision } from './service';
 import { extractSymbol, SUPPORTED_LANGUAGES } from './symbolExtractor';
-import { DecisionResult } from './types';
+import { BlameResult, DecisionResult } from './types';
 
 export function registerDecisionArchaeology(
     context: vscode.ExtensionContext,
@@ -67,18 +67,15 @@ async function provideDecisionHover(
         return null;
     }
 
-    const blame = await runGitBlame(document.uri.fsPath, symbol.range);
-    if (!blame) {
-        return null;
-    }
+    const blame = await runGitBlame(document.uri.fsPath, symbol.range) ?? buildFallbackBlame();
 
     const cacheKey = cache.buildKey(document.uri.fsPath, symbol.name, blame.commitHash);
     const cached = cache.get(cacheKey);
     if (cached) {
-        return formatHover(cached, blame, symbol);
+        return formatHover(cached, symbol);
     }
 
-    void fetchAndCacheDecision(
+    const fetched = await fetchAndCacheDecision(
         cacheKey,
         document,
         symbol,
@@ -89,5 +86,22 @@ async function provideDecisionHover(
         token
     );
 
-    return formatPartialHover(blame, symbol);
+    if (!fetched) {
+        return formatUnavailableHover(
+            symbol,
+            '*Could not fetch decision context right now. Check backend connectivity and session auth.*'
+        );
+    }
+
+    return formatHover(fetched, symbol);
+}
+
+function buildFallbackBlame(): BlameResult {
+    return {
+        commitHash: 'no-git',
+        author: 'Unknown',
+        timestamp: new Date(),
+        commitMessage: '',
+        linesChanged: 0,
+    };
 }

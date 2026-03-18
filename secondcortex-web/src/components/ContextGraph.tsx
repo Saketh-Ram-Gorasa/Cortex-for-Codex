@@ -29,12 +29,11 @@ declare global {
 
 interface SnapshotEvent {
     id: string;
-    timestamp: string;
+    timestamp: number;
+    developer_name: string;
     active_file: string;
     git_branch: string | null;
     summary: string;
-    entities: string[];
-    relations: Array<{ source: string; target: string; relation: string }>;
 }
 
 const NODE_STYLES: Record<string, React.CSSProperties> = {
@@ -83,14 +82,12 @@ const NODE_STYLES: Record<string, React.CSSProperties> = {
 
 interface ContextGraphProps {
     backendUrl?: string;
-    pollIntervalMs?: number;
     token?: string;
     onUnauthorized?: () => void;
 }
 
 export default function ContextGraph({
     backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
-    pollIntervalMs = 5000,
     token = '',
     onUnauthorized,
 }: ContextGraphProps) {
@@ -189,6 +186,22 @@ export default function ContextGraph({
             style: NODE_STYLES.file,
         });
 
+        const developerNodeId = `dev-${snapshot.id}`;
+        outNodes.push({
+            id: developerNodeId,
+            data: { label: `Developer: ${snapshot.developer_name || 'Unknown'}` },
+            position: { x: -260, y: -180 },
+            style: NODE_STYLES.commit,
+        });
+
+        outEdges.push({
+            id: `e-${developerNodeId}-${fileNodeId}`,
+            source: developerNodeId,
+            target: fileNodeId,
+            markerEnd: { type: MarkerType.ArrowClosed },
+            style: { stroke: 'rgba(255,255,255,0.45)', strokeWidth: 2 },
+        });
+
         if (snapshot.git_branch) {
             const branchNodeId = `branch-${snapshot.id}`;
             outNodes.push({
@@ -208,21 +221,18 @@ export default function ContextGraph({
             });
         }
 
-        snapshot.entities.slice(0, 8).forEach((entity, idx) => {
-            const entityNodeId = `entity-${snapshot.id}-${entity}`;
-            outNodes.push({
-                id: entityNodeId,
-                data: { label: `Entity: ${entity}` },
-                position: { x: 260, y: -180 + idx * 52 },
-                style: NODE_STYLES.entity,
-            });
-
-            outEdges.push({
-                id: `e-${fileNodeId}-${entityNodeId}`,
-                source: fileNodeId,
-                target: entityNodeId,
-                style: { stroke: 'rgba(255,255,255,0.35)', strokeDasharray: '4,6', strokeWidth: 1.5 },
-            });
+        const timestampNodeId = `time-${snapshot.id}`;
+        outNodes.push({
+            id: timestampNodeId,
+            data: { label: `Time: ${new Date(snapshot.timestamp).toLocaleString()}` },
+            position: { x: 260, y: -80 },
+            style: NODE_STYLES.entity,
+        });
+        outEdges.push({
+            id: `e-${fileNodeId}-${timestampNodeId}`,
+            source: fileNodeId,
+            target: timestampNodeId,
+            style: { stroke: 'rgba(255,255,255,0.35)', strokeDasharray: '4,6', strokeWidth: 1.5 },
         });
 
         if (snapshot.summary) {
@@ -248,28 +258,45 @@ export default function ContextGraph({
     }, []);
 
     useEffect(() => {
-        let active = true;
+        if (!token) {
+            setIsConnected(false);
+            return;
+        }
 
-        const poll = async () => {
+        let cancelled = false;
+        let eventSource: EventSource | null = null;
+
+        const startWatch = async () => {
             try {
-                const headers: Record<string, string> = {};
-                if (token) {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
-                const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000`, { headers });
-
-                if (res.status === 401 || res.status === 403) {
+                const authRes = await fetch(`${backendUrl}/api/sync/checkpoint`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                if (authRes.status === 401 || authRes.status === 403) {
                     setIsConnected(false);
-                    if (onUnauthorized) onUnauthorized();
+                    if (onUnauthorized) {
+                        onUnauthorized();
+                    }
                     return;
                 }
 
-                if (res.ok) {
+                if (!authRes.ok || cancelled) {
+                    setIsConnected(false);
+                    return;
+                }
+
+                const watchUrl = `${backendUrl}/api/sync/watch?token=${encodeURIComponent(token)}&after=0`;
+                eventSource = new EventSource(watchUrl);
+
+                eventSource.onopen = () => {
                     setIsConnected(true);
-                    const data = await res.json();
-                    if (Array.isArray(data.timeline)) {
-                        const nextTimeline = data.timeline as SnapshotEvent[];
-                        setTimeline(nextTimeline);
+                };
+
+                eventSource.addEventListener('team_snapshots', (event) => {
+                    const message = event as MessageEvent;
+                    try {
+                        const parsed = JSON.parse(message.data) as { rows?: SnapshotEvent[] };
+                        const nextTimeline = Array.isArray(parsed.rows) ? parsed.rows : [];
+                        setTimeline(nextTimeline.slice().reverse());
                         if (nextTimeline.length > 0) {
                             setSelectedIndex((prevIndex) => {
                                 if (!isPinnedInPast) {
@@ -278,26 +305,26 @@ export default function ContextGraph({
                                 return Math.min(prevIndex, nextTimeline.length - 1);
                             });
                         }
+                    } catch {
+                        // ignore malformed SSE payload
                     }
-                } else {
+                });
+
+                eventSource.onerror = () => {
                     setIsConnected(false);
-                }
+                };
             } catch {
                 setIsConnected(false);
             }
         };
 
-        const interval = setInterval(() => {
-            if (active) poll();
-        }, pollIntervalMs);
-
-        poll();
+        startWatch();
 
         return () => {
-            active = false;
-            clearInterval(interval);
+            cancelled = true;
+            eventSource?.close();
         };
-    }, [backendUrl, pollIntervalMs, token, onUnauthorized, isPinnedInPast]);
+    }, [backendUrl, token, onUnauthorized, isPinnedInPast]);
 
     useEffect(() => {
         const graph = buildGraphForSnapshot(selectedSnapshot);

@@ -1,9 +1,8 @@
 import * as vscode from 'vscode';
-import { BlameResult, DecisionResult, ExtractedSymbol } from './types';
+import { DecisionResult, ExtractedSymbol } from './types';
 
 export function formatHover(
     result: DecisionResult,
-    blame: BlameResult,
     symbol: ExtractedSymbol
 ): vscode.Hover {
     const md = new vscode.MarkdownString();
@@ -11,11 +10,6 @@ export function formatHover(
     md.supportHtml = true;
 
     md.appendMarkdown(`### 🧠 Decision History: \`${symbol.name}\`\n\n`);
-    md.appendMarkdown(
-        `*Last changed by **${blame.author}** on ${blame.timestamp.toLocaleDateString()} — ` +
-        `"${blame.commitMessage}"*\n\n`
-    );
-    md.appendMarkdown('---\n\n');
 
     if (!result.found) {
         md.appendMarkdown('*No workspace history found for this change.*\n');
@@ -44,15 +38,12 @@ export function formatHover(
     return new vscode.Hover(md, symbol.range);
 }
 
-export function formatPartialHover(
-    blame: BlameResult,
-    symbol: ExtractedSymbol
+export function formatUnavailableHover(
+    symbol: ExtractedSymbol,
+    message: string
 ): vscode.Hover {
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`### 🧠 \`${symbol.name}\`\n\n`);
-    md.appendMarkdown(
-        `*${blame.author} · ${blame.timestamp.toLocaleDateString()} · "${blame.commitMessage}"*\n\n`
-    );
-    md.appendMarkdown('*Loading decision history...*');
+    md.appendMarkdown(`### 🧠 Decision History: \`${symbol.name}\`\n\n`);
+    md.appendMarkdown(`${message}\n`);
     return new vscode.Hover(md, symbol.range);
 }

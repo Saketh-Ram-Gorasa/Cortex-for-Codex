@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { Debouncer } from './debouncer';
 import { SemanticFirewall } from '../security/firewall';
 import { SnapshotCache } from './snapshotCache';
 import { BackendClient } from '../backendClient';
+import { AuthService } from '../auth/authService';
+import { PowerSyncClient } from '../sync/powerSyncClient';
 
 /**
  * CapturedSnapshot – the sanitized data structure that leaves the laptop.
@@ -32,7 +35,9 @@ export class EventCapture {
         private debouncer: Debouncer,
         private firewall: SemanticFirewall,
         private cache: SnapshotCache,
+        private syncClient: PowerSyncClient,
         private backend: BackendClient,
+        private auth: AuthService,
         private output: vscode.OutputChannel
     ) { }
 
@@ -154,11 +159,39 @@ export class EventCapture {
 
         this.output.appendLine(`[EventCapture] Snapshot ready for: ${doc.uri.fsPath}`);
 
-        // ── Ship or cache ─────────────────────────────────────────
-        const success = await this.backend.sendSnapshot(snapshot as unknown as Record<string, unknown>);
-        if (!success) {
-            this.output.appendLine('[EventCapture] Backend unreachable — caching locally.');
-            this.cache.store(snapshot);
+        const user = await this.auth.getUser();
+        const userId = user?.userId ?? 'anonymous';
+        const teamId = user?.teamId ?? null;
+
+        const snapshotId = randomUUID();
+        const row = this.syncClient.buildRow({
+            id: snapshotId,
+            userId,
+            teamId,
+            workspace: snapshot.workspaceFolder,
+            activeFile: snapshot.activeFile,
+            gitBranch: snapshot.gitBranch,
+            terminalCommands: snapshot.terminalCommands,
+            summary: snapshot.shadowGraph.slice(0, 4000) || `Capture received: editing ${snapshot.activeFile}`,
+            timestampMs: Date.now(),
+        });
+
+        // ── Local-first write ─────────────────────────────────────
+        this.syncClient.storeSnapshot(row);
+
+        // ── Primary transport: PowerSync-compatible upload ────────
+        const syncOk = await this.syncClient.syncPending();
+
+        // ── Fallback transport: existing snapshot HTTP POST ───────
+        if (!syncOk) {
+            this.output.appendLine('[EventCapture] Sync transport unavailable — using snapshot HTTP fallback.');
+            const fallbackOk = await this.backend.sendSnapshot(snapshot as unknown as Record<string, unknown>);
+            if (fallbackOk) {
+                this.syncClient.markSynced([snapshotId]);
+            } else {
+                this.output.appendLine('[EventCapture] Backend unreachable — caching fallback snapshot locally.');
+                this.cache.store(snapshot);
+            }
         }
 
         // Clear terminal buffer after shipping

@@ -31,7 +31,7 @@ export class AuthService {
         await this.secrets.delete(AuthService.USER_KEY);
     }
 
-    async getUser(): Promise<{ userId: string; email: string; displayName: string } | undefined> {
+    async getUser(): Promise<{ userId: string; email: string; displayName: string; teamId?: string | null } | undefined> {
         const raw = await this.secrets.get(AuthService.USER_KEY);
         if (!raw) { return undefined; }
         try {
@@ -41,8 +41,8 @@ export class AuthService {
         }
     }
 
-    async setUser(userId: string, email: string, displayName: string): Promise<void> {
-        await this.secrets.store(AuthService.USER_KEY, JSON.stringify({ userId, email, displayName }));
+    async setUser(userId: string, email: string, displayName: string, teamId?: string | null): Promise<void> {
+        await this.secrets.store(AuthService.USER_KEY, JSON.stringify({ userId, email, displayName, teamId: teamId ?? null }));
     }
 
     async isLoggedIn(): Promise<boolean> {
@@ -65,9 +65,9 @@ export class AuthService {
                 return { success: false, error: body.detail || `Signup failed (${res.status})` };
             }
 
-            const data = await res.json() as { token: string; user_id: string; email: string; display_name: string };
+            const data = await res.json() as { token: string; user_id: string; email: string; display_name: string; team_id?: string | null };
             await this.setToken(data.token);
-            await this.setUser(data.user_id, data.email, data.display_name);
+            await this.setUser(data.user_id, data.email, data.display_name, data.team_id ?? null);
             this.output.appendLine(`[Auth] Signed up as ${data.email}`);
             return { success: true };
         } catch (err) {
@@ -89,9 +89,9 @@ export class AuthService {
                 return { success: false, error: body.detail || `Login failed (${res.status})` };
             }
 
-            const data = await res.json() as { token: string; user_id: string; email: string; display_name: string };
+            const data = await res.json() as { token: string; user_id: string; email: string; display_name: string; team_id?: string | null };
             await this.setToken(data.token);
-            await this.setUser(data.user_id, data.email, data.display_name);
+            await this.setUser(data.user_id, data.email, data.display_name, data.team_id ?? null);
             this.output.appendLine(`[Auth] Logged in as ${data.email}`);
             return { success: true };
         } catch (err) {

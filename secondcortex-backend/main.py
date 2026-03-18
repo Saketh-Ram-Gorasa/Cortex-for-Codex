@@ -16,6 +16,9 @@ import sys
 import os
 import re
 import json
+import time
+import jwt
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -32,6 +35,7 @@ except ImportError:
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Body
 from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -40,7 +44,7 @@ from agents.executor import ExecutorAgent
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
-from auth.jwt_handler import get_current_user
+from auth.jwt_handler import get_current_user, verify_token
 from auth.routes import router as auth_router
 from config import settings
 from models import schemas
@@ -59,7 +63,27 @@ from models.schemas import (
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
-from services.llm_client import create_llm_client, get_chat_model
+from services.llm_client import create_llm_client, create_async_llm_client, get_chat_model
+from pydantic import BaseModel, Field
+
+SYNC_TOKEN_EXPIRY_SECONDS = 3600
+
+
+class SyncSnapshotRow(BaseModel):
+    id: str
+    user_id: str
+    team_id: str | None = None
+    workspace: str
+    active_file: str
+    git_branch: str | None = None
+    terminal_commands: str = "[]"
+    summary: str = ""
+    timestamp: int
+    synced: int = 0
+
+
+class SyncDataRequest(BaseModel):
+    rows: list[SyncSnapshotRow] = Field(default_factory=list)
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -121,9 +145,53 @@ planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 simulator = SimulatorAgent()
 archaeology_llm_client = create_llm_client()
+archaeology_async_llm_client = create_async_llm_client()
 
 # Most recently received raw snapshot per user, updated immediately on /snapshot ingest.
 _latest_ingested_snapshot: dict[str, dict[str, Any]] = {}
+
+
+def _create_sync_token(user_id: str, team_id: str | None) -> str:
+    payload = {
+        "sub": user_id,
+        "team_id": team_id,
+        "kind": "powersync",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + SYNC_TOKEN_EXPIRY_SECONDS,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+
+
+def _verify_sync_token(token: str | None, user_id: str) -> bool:
+    if not token:
+        return False
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        return payload.get("kind") == "powersync" and payload.get("sub") == user_id
+    except Exception:
+        return False
+
+
+def _snapshot_payload_from_sync_row(row: SyncSnapshotRow) -> SnapshotPayload:
+    terminal_commands: list[str] = []
+    if row.terminal_commands:
+        try:
+            parsed = json.loads(row.terminal_commands)
+            if isinstance(parsed, list):
+                terminal_commands = [str(v) for v in parsed]
+        except Exception:
+            terminal_commands = []
+
+    timestamp_dt = datetime.utcfromtimestamp(max(0, row.timestamp) / 1000)
+    return SnapshotPayload(
+        timestamp=timestamp_dt,
+        workspaceFolder=row.workspace,
+        activeFile=row.active_file,
+        languageId="unknown",
+        shadowGraph=row.summary or "Synced snapshot",
+        gitBranch=row.git_branch,
+        terminalCommands=terminal_commands,
+    )
 
 
 def _is_latest_snapshot_question(question: str) -> bool:
@@ -276,7 +344,7 @@ Workspace snapshots:
 {snapshot_context}
 """
 
-    response = archaeology_llm_client.chat.completions.create(
+    response = await archaeology_async_llm_client.chat.completions.create(
         model=get_chat_model(),
         messages=[{"role": "user", "content": prompt}],
         max_tokens=150,
@@ -421,6 +489,125 @@ async def login_redirect():
 async def health_check():
     """Simple health check for load balancers and monitoring."""
     return {"status": "ok", "service": "secondcortex-backend", "version": "0.3.0"}
+
+
+@app.get("/api/sync/auth")
+async def get_sync_auth(user_id: str = Depends(get_current_user)):
+    """Issue a short-lived PowerSync-compatible token for the authenticated user."""
+    user = user_db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unknown user")
+
+    checkpoint = user_db.get_sync_checkpoint(user_id)
+    sync_token = _create_sync_token(user_id=user_id, team_id=user.get("team_id"))
+    return {
+        "token": sync_token,
+        "user_id": user_id,
+        "team_id": user.get("team_id"),
+        "checkpoint": checkpoint,
+    }
+
+
+@app.put("/api/sync/data")
+async def put_sync_data(
+    body: SyncDataRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Receive synced snapshot rows from extension local SQLite queue.
+    Stores raw rows, then triggers existing retriever/vector pipeline.
+    """
+    sync_token = request.headers.get("X-Sync-Token")
+    if not _verify_sync_token(sync_token, user_id):
+        raise HTTPException(status_code=401, detail="Invalid sync token")
+
+    user = user_db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unknown user")
+
+    synced_ids: list[str] = []
+    team_id = user.get("team_id")
+
+    for row in body.rows:
+        if row.user_id != user_id:
+            logger.warning("Skipping sync row with mismatched user_id row=%s auth=%s", row.user_id, user_id)
+            continue
+
+        raw_row = {
+            "id": row.id,
+            "user_id": user_id,
+            "team_id": team_id,
+            "workspace": row.workspace,
+            "active_file": row.active_file,
+            "git_branch": row.git_branch,
+            "terminal_commands": row.terminal_commands,
+            "summary": row.summary,
+            "timestamp": row.timestamp,
+            "synced": 1,
+        }
+        user_db.upsert_synced_snapshot(raw_row)
+
+        payload = _snapshot_payload_from_sync_row(row)
+        background_tasks.add_task(retriever.process_snapshot, payload, user_id)
+
+        _latest_ingested_snapshot[user_id] = {
+            "id": row.id,
+            "timestamp": datetime.utcfromtimestamp(max(0, row.timestamp) / 1000).isoformat() + "Z",
+            "active_file": row.active_file,
+            "git_branch": row.git_branch,
+            "summary": row.summary or f"Capture received: editing {row.active_file}",
+        }
+        synced_ids.append(row.id)
+
+    checkpoint = user_db.get_sync_checkpoint(user_id)
+    return {"status": "ok", "synced_ids": synced_ids, "checkpoint": checkpoint}
+
+
+@app.get("/api/sync/checkpoint")
+async def get_sync_checkpoint(user_id: str = Depends(get_current_user)):
+    """Return current checkpoint for authenticated user's team scope."""
+    checkpoint = user_db.get_sync_checkpoint(user_id)
+    return {"checkpoint": checkpoint}
+
+
+@app.get("/api/sync/watch")
+async def watch_team_snapshots(token: str, after: int = 0):
+    """Server-sent events stream used by frontend watched queries (no polling)."""
+
+    payload = verify_token(token)
+    if not payload or not payload.get("sub"):
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = str(payload.get("sub"))
+
+    async def event_stream():
+        last_checkpoint = after
+        while True:
+            snapshots = user_db.get_team_snapshots(user_id=user_id, per_member_limit=500)
+            checkpoint = max([int(s.get("timestamp") or 0) for s in snapshots], default=0)
+
+            if checkpoint > last_checkpoint:
+                team_payload: list[dict] = []
+                for snapshot in snapshots:
+                    owner = user_db.get_user_by_id(str(snapshot.get("user_id") or "")) or {}
+                    team_payload.append({
+                        "id": snapshot.get("id"),
+                        "user_id": snapshot.get("user_id"),
+                        "developer_name": owner.get("display_name") or owner.get("email") or snapshot.get("user_id"),
+                        "active_file": snapshot.get("active_file"),
+                        "git_branch": snapshot.get("git_branch"),
+                        "summary": snapshot.get("summary"),
+                        "timestamp": int(snapshot.get("timestamp") or 0),
+                    })
+
+                body = json.dumps({"checkpoint": checkpoint, "rows": team_payload})
+                yield f"event: team_snapshots\ndata: {body}\n\n"
+                last_checkpoint = checkpoint
+
+            await asyncio.sleep(2)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/v1/snapshot", status_code=200)

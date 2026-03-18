@@ -100,9 +100,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
                     const response = await this.backend.askQuestion(question, sessionId);
                     if (response && !(response as any)._error) {
+                        const styledSummary = this.formatAssistantResponse(response.summary, response.commands ?? []);
                         this.postMessage({
                             type: 'answer',
-                            summary: response.summary,
+                            summary: styledSummary,
                             commands: response.commands ?? [],
                             sessionId: sessionId
                         });
@@ -176,6 +177,46 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private postMessage(message: Record<string, unknown>): void {
         this._view?.webview.postMessage(message);
+    }
+
+    private formatAssistantResponse(summary: string, commands: unknown[]): string {
+        const cleanSummary = (summary || '').trim();
+        const commandLines = this.buildCommandLines(commands);
+
+        if (commandLines.length === 0) {
+            return cleanSummary;
+        }
+
+        return `${cleanSummary}\n\nSuggested actions:\n${commandLines.map((line) => `- ${line}`).join('\n')}`;
+    }
+
+    private buildCommandLines(commands: unknown[]): string[] {
+        const lines: string[] = [];
+
+        for (const command of commands) {
+            if (!command || typeof command !== 'object') {
+                continue;
+            }
+
+            const cmd = command as {
+                type?: string;
+                branch?: string;
+                filePath?: string;
+                command?: string;
+            };
+
+            if (cmd.type === 'git_checkout' && cmd.branch) {
+                lines.push(`Switch branch to \`${cmd.branch}\``);
+            } else if (cmd.type === 'open_file' && cmd.filePath) {
+                lines.push(`Open file \`${cmd.filePath}\``);
+            } else if (cmd.type === 'run_command' && cmd.command) {
+                lines.push(`Run \`${cmd.command}\``);
+            } else if (cmd.type) {
+                lines.push(`Run step: \`${cmd.type}\``);
+            }
+        }
+
+        return lines;
     }
 
     private getHtml(loggedIn: boolean, user?: { userId: string; email: string; displayName: string }): string {
@@ -584,6 +625,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             word-wrap: break-word;
             position: relative;
         }
+        .msg p { margin: 0 0 8px 0; }
+        .msg p:last-child { margin-bottom: 0; }
+        .msg h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-dim);
+            margin: 0 0 8px 0;
+        }
+        .msg ul {
+            margin: 0 0 8px 0;
+            padding-left: 16px;
+        }
+        .msg li { margin: 3px 0; }
+        .msg code {
+            font-family: var(--vscode-editor-font-family), monospace;
+            font-size: 12px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 5px;
+            padding: 1px 6px;
+        }
+        .msg pre {
+            margin: 8px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.08);
+            overflow-x: auto;
+        }
+        .msg pre code {
+            padding: 0;
+            border: none;
+            background: transparent;
+            font-size: 12px;
+            white-space: pre;
+        }
         .user .msg {
             background: #e5e7eb;
             color: #0b0b0b;
@@ -814,8 +892,59 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        function escapeHtml(text) {
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatInline(text) {
+            return escapeHtml(text).replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+        }
+
         function formatText(t) {
-            return t.replace(/\\\`([^\\\`]+)\\\`/g, '<code>$1</code>');
+            if (!t) return '';
+
+            const parts = String(t).split(/\`\`\`/);
+            let html = '';
+
+            for (let i = 0; i < parts.length; i++) {
+                if (i % 2 === 1) {
+                    html += '<pre><code>' + escapeHtml(parts[i].replace(/^\n/, '').replace(/\n$/, '')) + '</code></pre>';
+                    continue;
+                }
+
+                const blocks = parts[i].split(/\n\n+/);
+                for (const block of blocks) {
+                    const trimmed = block.trim();
+                    if (!trimmed) continue;
+
+                    const lines = trimmed.split('\n');
+                    const isList = lines.every(line => /^[-*]\s+/.test(line.trim()));
+
+                    if (isList) {
+                        const items = lines
+                            .map(line => line.trim().replace(/^[-*]\s+/, ''))
+                            .map(item => '<li>' + formatInline(item) + '</li>')
+                            .join('');
+                        html += '<ul>' + items + '</ul>';
+                        continue;
+                    }
+
+                    if (/^#{1,3}\s+/.test(trimmed)) {
+                        const heading = trimmed.replace(/^#{1,3}\s+/, '');
+                        html += '<h3>' + formatInline(heading) + '</h3>';
+                        continue;
+                    }
+
+                    html += '<p>' + formatInline(lines.join(' ')) + '</p>';
+                }
+            }
+
+            return html;
         }
 
         function toggleHistory() {

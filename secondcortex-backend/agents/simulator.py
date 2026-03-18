@@ -33,6 +33,8 @@ You MUST respond with ONLY valid JSON matching this schema:
 Rule:
 - If there are uncommitted or untracked changes in the git status output, set unstashed_changes to true.
 - If unstashed_changes is true, estimated_risk should be at least 'medium' (or 'high' if the target involves heavily modified files).
+- Include concrete conflicting file paths when available; otherwise leave conflicts empty.
+- Set estimated_risk = high when many files are modified, merge conflicts are present, or branch switch is likely destructive.
 - Keep the output purely valid JSON with no markdown wrapping.
 """
 

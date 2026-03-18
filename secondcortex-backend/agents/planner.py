@@ -24,8 +24,8 @@ logger = logging.getLogger("secondcortex.planner")
 MAX_STEPS = 1  # Reduced from 3 to conserve API quota
 
 PLANNER_SYSTEM_PROMPT = """\
-You are the SecondCortex Planner Agent. When a developer asks a question about \
-their project history, you must break it into concrete search tasks.
+You are the SecondCortex Planner Agent. Convert a developer question into the smallest
+set of high-signal semantic searches over snapshot memory.
 
 You MUST respond with ONLY valid JSON matching this schema:
 {
@@ -38,9 +38,13 @@ You MUST respond with ONLY valid JSON matching this schema:
 }
 
 Rules:
-- Maximum 3 search queries (circuit breaker).
-- Each query should be a focused semantic search string.
-- temporal_scope helps narrow the vector search window.
+- Maximum 3 search queries.
+- Prefer 1-2 queries unless the question explicitly needs multiple dimensions.
+- Each query must include concrete anchors from the question (file/symbol/branch/error/feature).
+- If the question is vague, include one clarifying query that seeks recent evidence first.
+- Avoid redundant paraphrases of the same query.
+- temporal_scope must be the narrowest scope that still answers correctly.
+- Return JSON only. No prose or markdown.
 """
 
 

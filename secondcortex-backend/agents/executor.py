@@ -50,10 +50,17 @@ You MUST respond with ONLY valid JSON matching this schema:
 }
 
 Rules:
-- "summary" must directly answer the user's question.
-- "reasoning_log" shows your chain of thought for transparency.
+- "summary" must be concise, specific, and easy to scan.
+- Write summary in this style (plain text/markdown-safe):
+    1) Direct answer in the first sentence.
+    2) Key evidence bullets using "- " prefixes.
+    3) Optional "Next step:" line when useful.
+- Do not mention unavailable evidence as facts.
+- If evidence is weak, explicitly say uncertainty and why.
+- "reasoning_log" should contain short factual steps, not verbose reasoning.
 - "confidence" must be between 0.0 and 1.0. If below 0.85, include discrepancies.
-- "commands" are optional Workspace Resurrection instructions.
+- "commands" are optional Workspace Resurrection instructions and should only be included when clearly useful.
+- Return JSON only. No markdown wrappers.
 """
 
 VALIDATION_PROMPT = """\
