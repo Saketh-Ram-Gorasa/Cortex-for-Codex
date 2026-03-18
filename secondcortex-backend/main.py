@@ -411,11 +411,15 @@ Workspace snapshots:
 {snapshot_context}
 """
 
-    response = await archaeology_async_llm_client.chat.completions.create(
-        model=get_chat_model(),
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=150,
-        temperature=0.2,
+    # Keep synthesis bounded to avoid API gateway timeouts during hover requests.
+    response = await asyncio.wait_for(
+        archaeology_async_llm_client.chat.completions.create(
+            model=get_chat_model(),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.2,
+        ),
+        timeout=12,
     )
 
     summary = (response.choices[0].message.content or "").strip() or "No workspace history found for this change."
@@ -430,6 +434,29 @@ Workspace snapshots:
     terminal_commands = _extract_relevant_commands(snapshots)
     confidence = min(len(snapshots) / 5.0, 1.0)
     return summary, branches_tried, terminal_commands, confidence
+
+
+def _build_fallback_decision_summary(symbol_name: str, commit_message: str, snapshots: list[dict]) -> str:
+    if not snapshots:
+        return "No workspace history found for this change."
+
+    newest = snapshots[-1]
+    oldest = snapshots[0]
+    newest_file = newest.get("active_file") or "unknown file"
+    newest_branch = newest.get("git_branch") or "unknown"
+    time_span = f"{oldest.get('timestamp', 'unknown')} → {newest.get('timestamp', 'unknown')}"
+
+    lines = [
+        f"Found {len(snapshots)} snapshot(s) for `{symbol_name}` around commit '{commit_message[:80]}'.",
+        f"Latest context shows edits in {newest_file} on branch {newest_branch}.",
+        f"Observed snapshot window: {time_span}.",
+    ]
+
+    commands = _extract_relevant_commands(snapshots)
+    if commands:
+        lines.append(f"Recent terminal context includes: {', '.join(commands[:3])}.")
+
+    return " ".join(lines)
 
 
 def _is_safe_resurrection_command(command: str) -> bool:
@@ -1024,7 +1051,34 @@ async def decision_archaeology(
     time_window_start = request.timestamp - timedelta(hours=2)
     time_window_end = request.timestamp + timedelta(hours=1)
 
-    timeline = await vector_db.get_snapshot_timeline(limit=2000, user_id=user_id)
+    # Bound expensive retrieval to keep hover interactions responsive.
+    timeline_task = asyncio.create_task(vector_db.get_snapshot_timeline(limit=800, user_id=user_id))
+    semantic_task = asyncio.create_task(vector_db.semantic_search(query=query, top_k=6, user_id=user_id))
+    symbol_task = asyncio.create_task(
+        vector_db.semantic_search(
+            query=f"function {request.symbol_name} implementation decision {request.commit_hash}",
+            top_k=4,
+            user_id=user_id,
+        )
+    )
+
+    timeline, semantic_results, symbol_results = await asyncio.gather(
+        asyncio.wait_for(timeline_task, timeout=6),
+        asyncio.wait_for(semantic_task, timeout=6),
+        asyncio.wait_for(symbol_task, timeout=6),
+        return_exceptions=True,
+    )
+
+    if isinstance(timeline, Exception):
+        logger.warning("Decision archaeology timeline retrieval degraded: %s", timeline)
+        timeline = []
+    if isinstance(semantic_results, Exception):
+        logger.warning("Decision archaeology semantic retrieval degraded: %s", semantic_results)
+        semantic_results = []
+    if isinstance(symbol_results, Exception):
+        logger.warning("Decision archaeology symbol retrieval degraded: %s", symbol_results)
+        symbol_results = []
+
     time_filtered: list[dict] = []
     for snapshot in timeline:
         if str(snapshot.get("active_file") or "") != request.file_path:
@@ -1037,17 +1091,10 @@ async def decision_archaeology(
         if time_window_start <= snapshot_ts <= time_window_end:
             time_filtered.append(snapshot)
 
-    semantic_results = await vector_db.semantic_search(query=query, top_k=8, user_id=user_id)
     semantic_file_filtered = [
         s for s in semantic_results
         if str(s.get("active_file") or "") == request.file_path
     ]
-
-    symbol_results = await vector_db.semantic_search(
-        query=f"function {request.symbol_name} implementation decision",
-        top_k=5,
-        user_id=user_id,
-    )
     symbol_file_filtered = [
         s for s in symbol_results
         if str(s.get("active_file") or "") == request.file_path
@@ -1057,23 +1104,38 @@ async def decision_archaeology(
         time_filtered + semantic_file_filtered + symbol_file_filtered
     )
 
+    # Keep synthesis context compact for predictable latency.
+    all_results = all_results[-18:]
+
     if not all_results:
         return ArchaeologyResponse(found=False, summary=None)
 
     try:
-        summary, branches_tried, terminal_commands, confidence = await _synthesize_decision_history(
+        summary, branches_tried, terminal_commands, confidence = await asyncio.wait_for(
+            _synthesize_decision_history(
             symbol_name=request.symbol_name,
             commit_message=request.commit_message,
             snapshots=all_results,
+            ),
+            timeout=14,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Decision synthesis timed out for %s in %s", request.symbol_name, request.file_path)
+        return ArchaeologyResponse(
+            found=True,
+            summary=_build_fallback_decision_summary(request.symbol_name, request.commit_message, all_results),
+            branchesTried=list(dict.fromkeys([str(s.get("git_branch")) for s in all_results if s.get("git_branch")]))[:3],
+            terminalCommands=_extract_relevant_commands(all_results),
+            confidence=min(len(all_results) / 8.0, 0.6),
         )
     except Exception as exc:
         logger.error("Decision synthesis failed: %s", exc)
         return ArchaeologyResponse(
             found=True,
-            summary="No workspace history found for this change.",
-            branchesTried=[],
-            terminalCommands=[],
-            confidence=0.0,
+            summary=_build_fallback_decision_summary(request.symbol_name, request.commit_message, all_results),
+            branchesTried=list(dict.fromkeys([str(s.get("git_branch")) for s in all_results if s.get("git_branch")]))[:3],
+            terminalCommands=_extract_relevant_commands(all_results),
+            confidence=min(len(all_results) / 10.0, 0.5),
         )
 
     return ArchaeologyResponse(
