@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from config import settings
 from services.vector_db import VectorDBService
@@ -56,21 +55,6 @@ class PlannerAgent:
         """
         logger.info("Planning for question: %s", question)
 
-        # Deterministic path for recency questions (e.g., "latest snapshot").
-        # This avoids semantic retrieval returning older but semantically similar snapshots.
-        if self._is_latest_lookup_question(question):
-            logger.info("Detected latest-snapshot style query. Using recency retrieval.")
-            timeline = await self.vector_db.get_snapshot_timeline(limit=25, user_id=user_id)
-            # Timeline is oldest -> newest. For recency retrieval we want newest first.
-            recent = list(reversed(timeline))
-            recent = self._apply_optional_branch_filter(recent, question)
-            return PlanResult(
-                intent="Fetch most recent snapshot context",
-                search_queries=["__recent_snapshots__"],
-                temporal_scope="all_time",
-                retrieved_context=recent,
-            )
-
         # ── Step 1: Generate the search plan via LLM ────────────
         plan = await self._generate_plan(question)
         logger.info("Plan: intent=%s, queries=%s, scope=%s",
@@ -94,44 +78,12 @@ class PlannerAgent:
                 seen_ids.add(rid)
                 unique_results.append(r)
 
-        # Always seed chat context with the newest snapshot first so extension chat
-        # reflects the latest captured IDE state.
-        latest_timeline = await self.vector_db.get_snapshot_timeline(limit=1, user_id=user_id)
-        latest_snapshot = latest_timeline[-1] if latest_timeline else None
-        if latest_snapshot:
-            latest_id = latest_snapshot.get("id", "")
-            if latest_id and latest_id not in seen_ids:
-                unique_results.insert(0, latest_snapshot)
-            elif unique_results and latest_id:
-                # If latest is already present, move it to the front.
-                latest_idx = next((i for i, item in enumerate(unique_results) if item.get("id", "") == latest_id), -1)
-                if latest_idx > 0:
-                    unique_results.insert(0, unique_results.pop(latest_idx))
-
         return PlanResult(
             intent=plan.get("intent", question),
             search_queries=search_queries,
             temporal_scope=plan.get("temporal_scope", "all_time"),
             retrieved_context=unique_results,
         )
-
-    def _is_latest_lookup_question(self, question: str) -> bool:
-        q = (question or "").strip().lower()
-        if not q:
-            return False
-
-        has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
-        has_snapshot_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|update|edited|editing|file|commit|branch)\b", q))
-        return has_recency and has_snapshot_context
-
-    def _apply_optional_branch_filter(self, snapshots: list[dict], question: str) -> list[dict]:
-        q = (question or "").lower()
-        wants_main_branch = "main branch" in q or re.search(r"\bon\s+main\b", q)
-        if wants_main_branch:
-            filtered = [s for s in snapshots if str(s.get("git_branch", "")).strip().lower() == "main"]
-            if filtered:
-                return filtered
-        return snapshots
 
     async def _generate_plan(self, question: str) -> dict:
         """Call GPT-4o to decompose the question into search tasks."""

@@ -10,9 +10,7 @@ import { CapturedSnapshot } from './eventCapture';
  * When the backend is unreachable, snapshots are written to a local store.
  * On reconnection (or next activation), `flushToBackend()` replays them chronologically.
  *
- * Note: We use a simple JSON file store for now instead of native better-sqlite3
- * to avoid native module compilation issues during development. The interface
- * is designed so that swapping in a real SQLite implementation later is trivial.
+ * Uses a simple JSON file store to avoid native module/runtime complexity.
  */
 export class SnapshotCache {
     private readonly cacheFilePath: string;

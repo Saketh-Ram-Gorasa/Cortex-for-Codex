@@ -17,10 +17,8 @@ import sys
 import os
 import re
 import json
-import time
-import jwt
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
@@ -36,7 +34,6 @@ except ImportError:
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Body
 from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -45,7 +42,7 @@ from agents.executor import ExecutorAgent
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
-from auth.jwt_handler import get_current_user, verify_token
+from auth.jwt_handler import get_current_user
 from auth.routes import router as auth_router
 from config import settings
 from models import schemas
@@ -66,33 +63,11 @@ from models.schemas import (
     StoredSnapshot,
     RetroIngestRequest,
     RetroIngestResponse,
-    EnrichedSnapshot,
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
 from services.llm_client import create_llm_client, create_async_llm_client, get_chat_model
 from services.git_ingest import RetroGitIngestionService
-from pydantic import BaseModel, Field
-
-SYNC_TOKEN_EXPIRY_SECONDS = 3600
-
-
-class SyncSnapshotRow(BaseModel):
-    id: str
-    user_id: str
-    team_id: str | None = None
-    workspace: str
-    active_file: str
-    git_branch: str | None = None
-    terminal_commands: str = "[]"
-    summary: str = ""
-    enriched_context: str = "{}"
-    timestamp: int
-    synced: int = 0
-
-
-class SyncDataRequest(BaseModel):
-    rows: list[SyncSnapshotRow] = Field(default_factory=list)
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -156,187 +131,6 @@ simulator = SimulatorAgent()
 archaeology_llm_client = create_llm_client()
 archaeology_async_llm_client = create_async_llm_client()
 git_ingestion = RetroGitIngestionService()
-
-# Most recently received raw snapshot per user, updated immediately on /snapshot ingest.
-_latest_ingested_snapshot: dict[str, dict[str, Any]] = {}
-
-
-def _create_sync_token(user_id: str, team_id: str | None) -> str:
-    payload = {
-        "sub": user_id,
-        "team_id": team_id,
-        "kind": "powersync",
-        "iat": int(time.time()),
-        "exp": int(time.time()) + SYNC_TOKEN_EXPIRY_SECONDS,
-    }
-    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
-
-
-def _verify_sync_token(token: str | None, user_id: str) -> bool:
-    if not token:
-        return False
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        return payload.get("kind") == "powersync" and payload.get("sub") == user_id
-    except Exception:
-        return False
-
-
-def _snapshot_payload_from_sync_row(row: SyncSnapshotRow) -> SnapshotPayload:
-    terminal_commands: list[str] = []
-    if row.terminal_commands:
-        try:
-            parsed = json.loads(row.terminal_commands)
-            if isinstance(parsed, list):
-                terminal_commands = [str(v) for v in parsed]
-        except Exception:
-            terminal_commands = []
-
-    timestamp_dt = datetime.utcfromtimestamp(max(0, row.timestamp) / 1000)
-    shadow_graph = row.summary or "Synced snapshot"
-    if row.enriched_context and row.enriched_context.strip() not in ("", "{}"):
-        try:
-            parsed = json.loads(row.enriched_context)
-            normalized = EnrichedSnapshot.model_validate(parsed)
-            shadow_graph = normalized.model_dump_json(by_alias=True)
-        except Exception:
-            shadow_graph = row.enriched_context
-
-    return SnapshotPayload(
-        timestamp=timestamp_dt,
-        workspaceFolder=row.workspace,
-        activeFile=row.active_file,
-        languageId="unknown",
-        shadowGraph=shadow_graph,
-        gitBranch=row.git_branch,
-        terminalCommands=terminal_commands,
-    )
-
-
-def _is_latest_snapshot_question(question: str) -> bool:
-    q = (question or "").strip().lower()
-    if not q:
-        return False
-
-    # Multi-snapshot analysis should NOT take the single-latest fast path.
-    has_multi_snapshot_intent = (
-        bool(re.search(r"\b(last|recent|past)\s+\d+\s+snapshots?\b", q))
-        or bool(re.search(r"\b(last|recent|past)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+snapshots?\b", q))
-        or bool(re.search(r"\b(summarize|summary|compare|across|history|timeline)\b", q))
-    )
-    if has_multi_snapshot_intent:
-        return False
-
-    has_recency = bool(
-        re.search(
-            r"\b("
-            r"latest|newest|most recent|current|fetch latest|"
-            r"last snapshot|recent snapshot"
-            r")\b",
-            q,
-        )
-    )
-    has_context = bool(re.search(r"\b(snapshot|context|edited|editing|file|commit|branch)\b", q))
-    return has_recency and has_context
-
-
-def _question_wants_main_branch(question: str) -> bool:
-    q = (question or "").lower()
-    return ("main branch" in q) or bool(re.search(r"\bon\s+main\b", q))
-
-
-def _build_latest_snapshot_summary(snapshot: dict, wants_main: bool) -> str:
-    ts = _format_snapshot_timestamp_with_timezone(snapshot.get("timestamp"))
-    file_path = snapshot.get("active_file") or "an unknown file"
-    branch = snapshot.get("git_branch") or "unknown"
-    work_context = _extract_work_context(snapshot)
-    scope = "Most recent main-branch snapshot:" if wants_main else "Most recent snapshot:"
-    return "\n".join(
-        [
-            scope,
-            f"- Work context: {work_context}",
-            f"- File: {file_path}",
-            f"- Branch: {branch}",
-            f"- Time: {ts}",
-        ]
-    )
-
-
-def _extract_work_context(snapshot: dict) -> str:
-    for key in ("summary", "shadow_graph", "document"):
-        value = str(snapshot.get(key) or "").strip()
-        if value:
-            normalized = " ".join(value.split())
-            return normalized[:180]
-    return "No work context available."
-
-
-def _format_snapshot_timestamp_with_timezone(raw_timestamp: Any) -> str:
-    if raw_timestamp is None:
-        return "unknown time"
-
-    dt: datetime | None = None
-
-    if isinstance(raw_timestamp, (int, float)):
-        ts = float(raw_timestamp)
-        if ts > 1_000_000_000_000:
-            ts /= 1000.0
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    elif isinstance(raw_timestamp, str):
-        value = raw_timestamp.strip()
-        if not value:
-            return "unknown time"
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        try:
-            dt = datetime.fromisoformat(value)
-        except Exception:
-            return str(raw_timestamp)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        return str(raw_timestamp)
-
-    tz_name = dt.tzname() or "UTC"
-    tz_offset = dt.strftime("%z")
-    if len(tz_offset) == 5:
-        tz_offset = f"{tz_offset[:3]}:{tz_offset[3:]}"
-    elif not tz_offset:
-        tz_offset = "+00:00"
-
-    return f"{dt.isoformat()} ({tz_name} {tz_offset})"
-
-
-def _get_timestamp_float(snapshot: dict | None) -> float:
-    """Convert snapshot timestamp to float (unix timestamp) for comparison."""
-    if not snapshot:
-        return 0.0
-    
-    ts = snapshot.get("timestamp")
-    if isinstance(ts, (int, float)):
-        return float(ts)
-    
-    if isinstance(ts, str):
-        try:
-            # Try ISO format first
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            return dt.timestamp()
-        except Exception:
-            return 0.0
-    
-    return 0.0
-
-
-def _pick_newer_snapshot(a: dict | None, b: dict | None) -> dict | None:
-    """Return the snapshot with the more recent timestamp."""
-    if a is None:
-        return b
-    if b is None:
-        return a
-    
-    ta = _get_timestamp_float(a)
-    tb = _get_timestamp_float(b)
-    return a if ta >= tb else b
 
 
 def _parse_terminal_commands(value: Any) -> list[str]:
@@ -603,126 +397,6 @@ async def health_check():
     return {"status": "ok", "service": "secondcortex-backend", "version": "0.3.0"}
 
 
-@app.get("/api/sync/auth")
-async def get_sync_auth(user_id: str = Depends(get_current_user)):
-    """Issue a short-lived PowerSync-compatible token for the authenticated user."""
-    user = user_db.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unknown user")
-
-    checkpoint = user_db.get_sync_checkpoint(user_id)
-    sync_token = _create_sync_token(user_id=user_id, team_id=user.get("team_id"))
-    return {
-        "token": sync_token,
-        "user_id": user_id,
-        "team_id": user.get("team_id"),
-        "checkpoint": checkpoint,
-    }
-
-
-@app.put("/api/sync/data")
-async def put_sync_data(
-    body: SyncDataRequest,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    user_id: str = Depends(get_current_user),
-):
-    """
-    Receive synced snapshot rows from extension local SQLite queue.
-    Stores raw rows, then triggers existing retriever/vector pipeline.
-    """
-    sync_token = request.headers.get("X-Sync-Token")
-    if not _verify_sync_token(sync_token, user_id):
-        raise HTTPException(status_code=401, detail="Invalid sync token")
-
-    user = user_db.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unknown user")
-
-    synced_ids: list[str] = []
-    team_id = user.get("team_id")
-
-    for row in body.rows:
-        if row.user_id != user_id:
-            logger.warning("Skipping sync row with mismatched user_id row=%s auth=%s", row.user_id, user_id)
-            continue
-
-        raw_row = {
-            "id": row.id,
-            "user_id": user_id,
-            "team_id": team_id,
-            "workspace": row.workspace,
-            "active_file": row.active_file,
-            "git_branch": row.git_branch,
-            "terminal_commands": row.terminal_commands,
-            "summary": row.summary,
-            "enriched_context": row.enriched_context,
-            "timestamp": row.timestamp,
-            "synced": 1,
-        }
-        user_db.upsert_synced_snapshot(raw_row)
-
-        payload = _snapshot_payload_from_sync_row(row)
-        background_tasks.add_task(retriever.process_snapshot, payload, user_id)
-
-        _latest_ingested_snapshot[user_id] = {
-            "id": row.id,
-            "timestamp": datetime.utcfromtimestamp(max(0, row.timestamp) / 1000).isoformat() + "Z",
-            "active_file": row.active_file,
-            "git_branch": row.git_branch,
-            "summary": row.summary or f"Capture received: editing {row.active_file}",
-        }
-        synced_ids.append(row.id)
-
-    checkpoint = user_db.get_sync_checkpoint(user_id)
-    return {"status": "ok", "synced_ids": synced_ids, "checkpoint": checkpoint}
-
-
-@app.get("/api/sync/checkpoint")
-async def get_sync_checkpoint(user_id: str = Depends(get_current_user)):
-    """Return current checkpoint for authenticated user's team scope."""
-    checkpoint = user_db.get_sync_checkpoint(user_id)
-    return {"checkpoint": checkpoint}
-
-
-@app.get("/api/sync/watch")
-async def watch_team_snapshots(token: str, after: int = 0):
-    """Server-sent events stream used by frontend watched queries (no polling)."""
-
-    payload = verify_token(token)
-    if not payload or not payload.get("sub"):
-        raise HTTPException(status_code=401, detail="Invalid token")
-    user_id = str(payload.get("sub"))
-
-    async def event_stream():
-        last_checkpoint = after
-        while True:
-            snapshots = user_db.get_team_snapshots(user_id=user_id, per_member_limit=500)
-            checkpoint = max([int(s.get("timestamp") or 0) for s in snapshots], default=0)
-
-            if checkpoint > last_checkpoint:
-                team_payload: list[dict] = []
-                for snapshot in snapshots:
-                    owner = user_db.get_user_by_id(str(snapshot.get("user_id") or "")) or {}
-                    team_payload.append({
-                        "id": snapshot.get("id"),
-                        "user_id": snapshot.get("user_id"),
-                        "developer_name": owner.get("display_name") or owner.get("email") or snapshot.get("user_id"),
-                        "active_file": snapshot.get("active_file"),
-                        "git_branch": snapshot.get("git_branch"),
-                        "summary": snapshot.get("summary"),
-                        "timestamp": int(snapshot.get("timestamp") or 0),
-                    })
-
-                body = json.dumps({"checkpoint": checkpoint, "rows": team_payload})
-                yield f"event: team_snapshots\ndata: {body}\n\n"
-                last_checkpoint = checkpoint
-
-            await asyncio.sleep(2)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
 @app.post("/api/v1/snapshot", status_code=200)
 async def receive_snapshot(
     payload: SnapshotPayload,
@@ -734,16 +408,6 @@ async def receive_snapshot(
     Returns 200 OK instantly, then processes asynchronously via Retriever.
     """
     logger.info("Received snapshot for file: %s (user=%s)", payload.active_file, user_id)
-
-    # Immediate cache update so latest queries can reflect ingest instantly,
-    # even if async retrieval/vector indexing is still in progress.
-    _latest_ingested_snapshot[user_id] = {
-        "id": "pending",
-        "timestamp": payload.timestamp.isoformat() if hasattr(payload.timestamp, "isoformat") else str(payload.timestamp),
-        "active_file": payload.active_file,
-        "git_branch": payload.git_branch,
-        "summary": f"Capture received: editing {payload.active_file}",
-    }
 
     background_tasks.add_task(retriever.process_snapshot, payload, user_id)
     return {"status": "accepted", "message": "Snapshot queued for processing."}
@@ -938,44 +602,6 @@ async def handle_query(
     try:
         logger.info("Query received: %s (user=%s, session=%s)", req.question, user_id, session_id)
 
-        # Deterministic fast-path for recency questions.
-        # Avoids LLM choosing semantically similar but older snapshots.
-        if _is_latest_snapshot_question(req.question):
-            wants_main = _question_wants_main_branch(req.question)
-            timeline = await vector_db.get_snapshot_timeline(limit=50, user_id=user_id)
-            recent = list(reversed(timeline))
-            latest_ingested = _latest_ingested_snapshot.get(user_id)
-
-            if wants_main:
-                recent = [r for r in recent if str(r.get("git_branch", "")).strip().lower() == "main"]
-                if latest_ingested and str(latest_ingested.get("git_branch", "")).strip().lower() != "main":
-                    latest_ingested = None
-
-            latest_stored = recent[0] if recent else None
-            latest = _pick_newer_snapshot(latest_ingested, latest_stored)
-
-            if latest:
-                response = QueryResponse(
-                    summary=_build_latest_snapshot_summary(latest, wants_main),
-                    reasoningLog=[
-                        "Detected latest-snapshot query and used recency retrieval.",
-                        f"Selected snapshot id={latest.get('id', 'unknown')} timestamp={latest.get('timestamp', 'unknown')}",
-                    ],
-                    commands=[],
-                )
-            else:
-                response = QueryResponse(
-                    summary=(
-                        "No matching snapshots were found for that latest query. "
-                        "Try again after a new snapshot is captured."
-                    ),
-                    reasoningLog=["Recency retrieval returned no snapshots."],
-                    commands=[],
-                )
-
-            user_db.save_chat_message(user_id, "user", req.question, session_id=session_id)
-            user_db.save_chat_message(user_id, "assistant", response.summary, session_id=session_id)
-            return response
 
         # Step 1: Plan — break the question into search tasks
         plan_result = await planner.plan(req.question, user_id=user_id)

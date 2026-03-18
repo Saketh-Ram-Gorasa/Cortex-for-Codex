@@ -100,11 +100,6 @@
           "type": "boolean",
           "default": true,
           "description": "Enable or disable automatic context capture."
-        },
-        "secondcortex.enablePowerSync": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable PowerSync local queue transport. Keep disabled unless you explicitly want PowerSync mode."
         }
       }
     }
@@ -129,7 +124,6 @@
     "eslint": "^8.56.0"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0",
     "minimatch": "^9.0.0",
     "node-fetch": "^3.3.0",
     "typescript": "^5.3.0"
