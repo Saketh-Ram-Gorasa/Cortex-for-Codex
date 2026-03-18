@@ -24,27 +24,21 @@ logger = logging.getLogger("secondcortex.planner")
 MAX_STEPS = 1  # Reduced from 3 to conserve API quota
 
 PLANNER_SYSTEM_PROMPT = """\
-You are the SecondCortex Planner Agent. Convert a developer question into the smallest
-set of high-signal semantic searches over snapshot memory.
+Break a developer question into 1-2 high-signal semantic searches for IDE snapshots.
 
-You MUST respond with ONLY valid JSON matching this schema:
+Respond with ONLY valid JSON (no prose, no markdown):
 {
-  "intent": "Brief description of what the developer wants to know",
-  "search_queries": [
-    "semantic search query 1",
-    "semantic search query 2"
-  ],
-  "temporal_scope": "last_hour" | "last_day" | "last_week" | "all_time"
+  "intent": "Brief intent",
+  "search_queries": ["query1"],
+  "temporal_scope": "last_hour" | "last_day" | "all_time"
 }
 
 Rules:
-- Maximum 3 search queries.
-- Prefer 1-2 queries unless the question explicitly needs multiple dimensions.
-- Each query must include concrete anchors from the question (file/symbol/branch/error/feature).
-- If the question is vague, include one clarifying query that seeks recent evidence first.
-- Avoid redundant paraphrases of the same query.
-- temporal_scope must be the narrowest scope that still answers correctly.
-- Return JSON only. No prose or markdown.
+- Max 2 queries (prefer 1).
+- Include concrete anchors from question (file/error/branch/symbol).
+- If vague, add 1 clarifying query for recent evidence.
+- temporal_scope: Narrowest scope that answers the question.
+- Return JSON only.
 """
 
 

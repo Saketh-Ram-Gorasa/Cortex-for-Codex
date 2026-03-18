@@ -169,7 +169,7 @@ class VectorDBService:
             return []
 
     async def get_snapshot_timeline(self, limit: int = 200, user_id: str | None = None) -> list[dict]:
-        """Fetch a chronologically sorted timeline of snapshot metadata."""
+        """Fetch a chronologically sorted timeline of snapshot metadata (newest first)."""
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — returning empty timeline.")
@@ -177,18 +177,36 @@ class VectorDBService:
 
         try:
             total = collection.count() or 0
+            if total == 0:
+                return []
+            
+            # Fetch only what we need + some buffer for sorting
+            fetch_limit = min(total, max(limit * 3, 500))
             results = collection.get(
-                limit=total if total > 0 else 1,
+                limit=fetch_limit,
                 include=["metadatas"]
             )
             if not results or not results.get("metadatas"):
                 return []
 
             metadatas = [dict(meta) for meta in results["metadatas"] if meta]
-            # Oldest -> newest for linear slider traversal.
-            metadatas.sort(key=lambda m: m.get("timestamp", ""))
-            # Return only the last `limit` entries (newest window)
-            return metadatas[-limit:] if len(metadatas) > limit else metadatas
+            # Sort by timestamp (newest first) with proper numeric comparison
+            def get_sort_key(m: dict) -> float:
+                ts = m.get("timestamp", "")
+                if isinstance(ts, (int, float)):
+                    return float(ts)
+                # Try parsing ISO string to float unix timestamp
+                if isinstance(ts, str):
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        return dt.timestamp()
+                    except Exception:
+                        return 0.0
+                return 0.0
+            
+            metadatas.sort(key=get_sort_key, reverse=True)
+            return metadatas[:limit]
         except Exception as exc:
             logger.error("get_snapshot_timeline failed: %s", exc)
             return []

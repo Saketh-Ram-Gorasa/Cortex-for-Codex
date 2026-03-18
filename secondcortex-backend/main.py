@@ -226,32 +226,36 @@ def _build_latest_snapshot_summary(snapshot: dict, wants_main: bool) -> str:
     )
 
 
-def _parse_iso_timestamp(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        # Handle trailing Z if present.
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
-        return None
+def _get_timestamp_float(snapshot: dict | None) -> float:
+    """Convert snapshot timestamp to float (unix timestamp) for comparison."""
+    if not snapshot:
+        return 0.0
+    
+    ts = snapshot.get("timestamp")
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    
+    if isinstance(ts, str):
+        try:
+            # Try ISO format first
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return dt.timestamp()
+        except Exception:
+            return 0.0
+    
+    return 0.0
 
 
 def _pick_newer_snapshot(a: dict | None, b: dict | None) -> dict | None:
+    """Return the snapshot with the more recent timestamp."""
     if a is None:
         return b
     if b is None:
         return a
-
-    ta = _parse_iso_timestamp(a.get("timestamp"))
-    tb = _parse_iso_timestamp(b.get("timestamp"))
-
-    if ta and tb:
-        return a if ta >= tb else b
-    if ta and not tb:
-        return a
-    if tb and not ta:
-        return b
-    return a
+    
+    ta = _get_timestamp_float(a)
+    tb = _get_timestamp_float(b)
+    return a if ta >= tb else b
 
 
 def _parse_terminal_commands(value: Any) -> list[str]:

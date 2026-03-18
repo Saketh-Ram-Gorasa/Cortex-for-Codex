@@ -25,42 +25,23 @@ logger = logging.getLogger("secondcortex.executor")
 ENABLE_VALIDATION = False
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You are the SecondCortex Executor Agent. You receive retrieved context \
-(snapshots from the developer's IDE history) and the original user question. \
-Your job is to synthesize a clear, accurate timeline/story answering their question.
+You are the SecondCortex Executor. Synthesize a brief, direct answer from retrieved snapshots.
 
-You MUST respond with ONLY valid JSON matching this schema:
+Respond with ONLY valid JSON (no markdown, no prose):
 {
-  "summary": "A clear, human-readable answer to the question",
-  "reasoning_log": [
-    "Step 1: Found commit on branch fix-payment at 14:30...",
-    "Step 2: Cross-referenced with file auth.go..."
-  ],
-  "confidence": 0.0 to 1.0,
-  "discrepancies": ["Optional: any conflicting data points found"],
-  "commands": [
-    {
-      "type": "git_stash" | "git_checkout" | "open_file" | "split_terminal" | "run_command",
-      "branch": "optional",
-      "filePath": "optional",
-      "viewColumn": 1,
-      "command": "optional"
-    }
-  ]
+  "summary": "Direct 1-2 sentence answer. Add 2-3 bullet facts if helpful. Max 200 chars.",
+  "reasoning_log": ["Step 1: ...", "Step 2: ..."],
+  "confidence": 0.7,
+  "discrepancies": [],
+  "commands": []
 }
 
 Rules:
-- "summary" must be concise, specific, and easy to scan.
-- Write summary in this style (plain text/markdown-safe):
-    1) Direct answer in the first sentence.
-    2) Key evidence bullets using "- " prefixes.
-    3) Optional "Next step:" line when useful.
-- Do not mention unavailable evidence as facts.
-- If evidence is weak, explicitly say uncertainty and why.
-- "reasoning_log" should contain short factual steps, not verbose reasoning.
-- "confidence" must be between 0.0 and 1.0. If below 0.85, include discrepancies.
-- "commands" are optional Workspace Resurrection instructions and should only be included when clearly useful.
-- Return JSON only. No markdown wrappers.
+- Summary: Answer FIRST sentence. Then optional bullets (- fact). Keep to <200 chars.
+- confidence: 0.0-1.0. Low confidence = be explicit about uncertainty.
+- reasoning_log: 2-3 short factual lines max.
+- commands: [] unless explicitly helpful (resurrect branch, open file).
+- Return JSON only. No wrapping markdown or extra prose.
 """
 
 VALIDATION_PROMPT = """\
