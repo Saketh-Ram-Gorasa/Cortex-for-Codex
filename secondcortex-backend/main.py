@@ -38,7 +38,7 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from agents.executor import ExecutorAgent
+from agents.executor import ExecutorAgent, _build_latest_snapshot_bullet_summary
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
@@ -269,6 +269,24 @@ def _build_fallback_decision_summary(symbol_name: str, commit_message: str, snap
         lines.append(f"Recent terminal context includes: {', '.join(commands[:3])}.")
 
     return " ".join(lines)
+
+
+def _is_activity_lookup_question(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+
+    return bool(
+        re.search(
+            r"\b("
+            r"what am i doing|what was i doing|"
+            r"what am i working on|what was i working on|"
+            r"current activity|current task|"
+            r"latest activity|latest work"
+            r")\b",
+            q,
+        )
+    )
 
 
 def _is_safe_resurrection_command(command: str) -> bool:
@@ -602,8 +620,28 @@ async def handle_query(
     try:
         logger.info("Query received: %s (user=%s, session=%s)", req.question, user_id, session_id)
 
+        if _is_activity_lookup_question(req.question):
+            latest = await vector_db.get_snapshot_timeline(limit=1, user_id=user_id)
+            if latest:
+                response = QueryResponse(
+                    summary=_build_latest_snapshot_bullet_summary(latest[0]),
+                    reasoningLog=["Returned the latest captured snapshot for activity lookup."],
+                    commands=[],
+                )
+            else:
+                response = QueryResponse(
+                    summary="No snapshots captured yet. Edit or save a file once, then ask again.",
+                    reasoningLog=["Activity lookup requested but timeline is empty for this user."],
+                    commands=[],
+                )
 
-        # Step 1: Plan — break the question into search tasks
+            user_db.save_chat_message(user_id, "user", req.question, session_id=session_id)
+            user_db.save_chat_message(user_id, "assistant", response.summary, session_id=session_id)
+            logger.info("Activity lookup answered via timeline fast path.")
+            return response
+
+
+        # Step 1: Plan - break the question into search tasks
         plan_result = await planner.plan(req.question, user_id=user_id)
 
         # Step 2: Execute — synthesize and validate

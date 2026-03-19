@@ -740,6 +740,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             filter: brightness(1.1);
         }
         #send-btn:active { transform: scale(0.98); }
+        #send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            filter: none;
+        }
 
         .shield-badge {
             display: flex;
@@ -843,6 +849,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         // State persistence
         let state = vscode.getState() || { messages: [], sessionId: null, sessions: [] };
+        let isAwaitingResponse = false;
         
         // Initial render from state (instant recovery)
         if (state.messages && state.messages.length > 0) {
@@ -857,6 +864,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         function saveState() {
             vscode.setState(state);
+        }
+
+        function setPendingRequest(pending) {
+            isAwaitingResponse = pending;
+            sendBtn.disabled = pending;
+            input.disabled = pending;
         }
 
         function renderAllMessages(messages) {
@@ -983,12 +996,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         function send() {
+            if (isAwaitingResponse) return;
             const q = input.value.trim();
             if (!q) return;
+
             addMessage('user', q);
             state.messages.push({ role: 'user', content: q, timestamp: new Date().toISOString() });
             saveState();
             input.value = '';
+            setPendingRequest(true);
             vscode.postMessage({ type: 'ask', question: q, sessionId: state.sessionId });
         }
 
@@ -1039,6 +1055,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     vscode.postMessage({ type: 'getSessions' });
                     break;
                 case 'loading':
+                    if (chatLog.querySelector('.loading-wrapper')) {
+                        break;
+                    }
                     const loader = document.createElement('div');
                     loader.className = 'msg-wrapper assistant loading-wrapper';
                     loader.innerHTML = '<div class="msg loading">Thinking...</div>';
@@ -1049,12 +1068,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     addMessage('assistant', msg.summary);
                     state.messages.push({ role: 'assistant', content: msg.summary, timestamp: new Date().toISOString() });
                     saveState();
+                    setPendingRequest(false);
                     break;
                 case 'error':
                     const errWrapper = document.createElement('div');
                     errWrapper.className = 'msg-wrapper assistant';
                     errWrapper.innerHTML = '<div class="msg error">Error: ' + msg.message + '</div>';
                     chatLog.appendChild(errWrapper);
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                    setPendingRequest(false);
                     break;
             }
         });

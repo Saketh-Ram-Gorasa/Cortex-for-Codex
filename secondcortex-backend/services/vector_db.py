@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import json
+import hashlib
+import random
 from typing import Any
 
 import chromadb
@@ -53,6 +55,29 @@ class VectorDBService:
             logger.error("Failed to get/create collection '%s': %s", collection_name, exc)
             return None
 
+    def _infer_collection_dimension(self, collection, default_dim: int = 1536) -> int:
+        """Infer vector dimension from existing records, or fall back to a default."""
+        try:
+            if (collection.count() or 0) <= 0:
+                return default_dim
+
+            probe = collection.get(limit=1, include=["embeddings"])
+            embeddings = (probe or {}).get("embeddings") or []
+            if embeddings and embeddings[0]:
+                return len(embeddings[0])
+        except Exception:
+            pass
+        return default_dim
+
+    def _build_fallback_embedding(self, text: str, dimension: int) -> list[float]:
+        """
+        Deterministic fallback embedding used when external embedding APIs fail.
+        Keeps ingestion/query functional instead of dropping all context.
+        """
+        seed = int.from_bytes(hashlib.sha256((text or "").encode("utf-8")).digest()[:8], "big")
+        rng = random.Random(seed)
+        return [rng.uniform(-1.0, 1.0) for _ in range(max(1, dimension))]
+
     # ── Embeddings ──────────────────────────────────────────────
 
     async def generate_embedding(self, text: str) -> list[float]:
@@ -92,9 +117,24 @@ class VectorDBService:
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
             }
 
+            embedding = snapshot.embedding or []
+            if not embedding:
+                dimension = self._infer_collection_dimension(collection)
+                embedding_source = (
+                    f"{metadata.get('active_file', '')}\n"
+                    f"{metadata.get('summary', '')}\n"
+                    f"{metadata.get('shadow_graph', '')}"
+                )
+                embedding = self._build_fallback_embedding(embedding_source, dimension)
+                logger.warning(
+                    "Snapshot %s missing external embedding; using deterministic fallback vector (dim=%d).",
+                    snapshot.id,
+                    len(embedding),
+                )
+
             collection.upsert(
                 ids=[str(snapshot.id)],
-                embeddings=[snapshot.embedding or []],
+                embeddings=[embedding],
                 metadatas=[metadata],
                 documents=[str(snapshot.shadow_graph or "")]
             )
@@ -114,8 +154,8 @@ class VectorDBService:
             query_embedding = await self.generate_embedding(query)
 
             if not query_embedding:
-                logger.warning("No query embedding generated.")
-                return []
+                logger.warning("No query embedding generated; falling back to recent snapshots.")
+                return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
 
             results = collection.query(
                 query_embeddings=[query_embedding],
@@ -128,11 +168,11 @@ class VectorDBService:
                 if metadatas_list is not None:
                     return [dict(meta) for meta in metadatas_list]
 
-            return []
+            return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
 
         except Exception as exc:
             logger.error("Semantic search failed: %s", exc)
-            return []
+            return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
 
     async def get_recent_snapshots(self, limit: int = 10, user_id: str | None = None) -> list[dict]:
         """Fetch the most recent snapshots using direct retrieval (not vector search).

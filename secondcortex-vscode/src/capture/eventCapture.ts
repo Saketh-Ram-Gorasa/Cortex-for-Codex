@@ -136,6 +136,18 @@ export class EventCapture {
         });
         this.disposables.push(focusSub);
 
+        // Seed context immediately so first chat query has at least one snapshot.
+        const bootstrapEditor = vscode.window.activeTextEditor;
+        const captureEnabled = vscode.workspace.getConfiguration('secondcortex').get<boolean>('captureEnabled', true);
+        if (captureEnabled && bootstrapEditor && bootstrapEditor.document.uri.scheme === 'file') {
+            const bootstrapPath = bootstrapEditor.document.uri.fsPath;
+            if (!this.firewall.isIgnored(bootstrapPath)) {
+                this.captureDocumentAndShip(bootstrapEditor.document).catch((err) => {
+                    this.output.appendLine(`[EventCapture] Error capturing startup snapshot: ${err}`);
+                });
+            }
+        }
+
         context.subscriptions.push(...this.disposables);
     }
 
