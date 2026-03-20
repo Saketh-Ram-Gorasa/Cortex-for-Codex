@@ -18,24 +18,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Backend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./secondcortex-backend
           push: true
           tags: ${{ env.BACKEND_IMAGE }}:latest
 
       - name: Build and push Frontend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./secondcortex-web
           push: true
@@ -63,3 +63,35 @@ jobs:
           app-name: sc-frontend-suhaan
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_FRONTEND }}
           images: ${{ env.FRONTEND_IMAGE }}:latest
+
+      - name: Backend health check
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..12}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://sc-backend-suhaan.azurewebsites.net/health || true)
+            if [ "$code" = "200" ]; then
+              echo "Backend health check passed"
+              exit 0
+            fi
+            echo "Backend not ready yet (attempt $i/12, status=$code)"
+            sleep 10
+          done
+          echo "Backend health check failed"
+          exit 1
+
+      - name: Frontend health check
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..12}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://sc-frontend-suhaan.azurewebsites.net/ || true)
+            if [ "$code" = "200" ]; then
+              echo "Frontend health check passed"
+              exit 0
+            fi
+            echo "Frontend not ready yet (attempt $i/12, status=$code)"
+            sleep 10
+          done
+          echo "Frontend health check failed"
+          exit 1
