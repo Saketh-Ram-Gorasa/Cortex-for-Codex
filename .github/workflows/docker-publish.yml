@@ -34,6 +34,33 @@ jobs:
           push: true
           tags: ${{ env.BACKEND_IMAGE }}:latest
 
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Backend to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: sc-backend-suhaan
+          images: ${{ env.BACKEND_IMAGE }}:latest
+
+      - name: Deploy Frontend to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: sc-frontend-suhaan
+          images: ${{ env.FRONTEND_IMAGE }}:latest
+
       - name: Build and push Frontend image
         uses: docker/build-push-action@v5
         with:
