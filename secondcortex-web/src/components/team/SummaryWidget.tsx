@@ -13,6 +13,14 @@ interface MemberSummary {
   status: string;
 }
 
+interface SummaryResponse {
+  total_snapshots: number;
+  active_members?: number;
+  members?: MemberSummary[];
+  daily_breakdown?: Record<string, number>;
+  generated_at: string;
+}
+
 interface SummaryWidgetProps {
   teamId?: string;
   userId?: string;
@@ -34,7 +42,7 @@ export default function SummaryWidget({
   context,
   token,
 }: SummaryWidgetProps) {
-  const [summary, setSummary] = useState<any>(null);
+  const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -149,7 +157,7 @@ export default function SummaryWidget({
         <div className="border-t border-slate-700 pt-3">
           <div className="text-slate-300 mb-2">Daily Breakdown</div>
           <div className="space-y-1 text-slate-400">
-            {Object.entries(summary.daily_breakdown).map(([day, count]: [string, any]) => (
+            {Object.entries(summary.daily_breakdown).map(([day, count]) => (
               <div key={day} className="flex justify-between">
                 <span>{day}</span>
                 <span className="text-green-400 font-semibold">{count}</span>

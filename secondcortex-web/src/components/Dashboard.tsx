@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import SummaryWidget from '@/components/team/SummaryWidget';
 
 interface DashboardProps {
     token: string;
@@ -13,10 +14,27 @@ interface Stats {
     activeProject: string;
 }
 
+function getUserIdFromToken(token: string): string | null {
+    try {
+        const payloadBase64 = token.split('.')[1];
+        if (!payloadBase64) {
+            return null;
+        }
+
+        const base64 = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+        const payload = JSON.parse(atob(padded));
+        return typeof payload.sub === 'string' ? payload.sub : null;
+    } catch {
+        return null;
+    }
+}
+
 export default function Dashboard({ 
     token, 
     backendUrl = 'https://sc-backend-suhaan.azurewebsites.net' 
 }: DashboardProps) {
+    const userId = getUserIdFromToken(token);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
@@ -187,6 +205,36 @@ export default function Dashboard({
                         </ul>
                     </div>
                 </div>
+
+                {userId && (
+                    <div className="sc-dashboard-panel">
+                        <div className="sc-dashboard-panel-inner" style={{ display: 'block' }}>
+                            <div className="sc-dashboard-text" style={{ marginBottom: 16 }}>
+                                <h2 className="sc-dashboard-h2">Your Activity</h2>
+                                <p className="sc-dashboard-p">Daily and weekly summaries from the shared summary service.</p>
+                            </div>
+
+                            <div className="sc-guide-grid">
+                                <div className="sc-guide-card">
+                                    <SummaryWidget
+                                        userId={userId}
+                                        period="daily"
+                                        context="individual"
+                                        token={token}
+                                    />
+                                </div>
+                                <div className="sc-guide-card">
+                                    <SummaryWidget
+                                        userId={userId}
+                                        period="weekly"
+                                        context="individual"
+                                        token={token}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Modal */}
