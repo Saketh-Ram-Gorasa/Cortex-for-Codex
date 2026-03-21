@@ -276,3 +276,40 @@ class ChatSession(BaseModel):
 
 class ChatSessionsResponse(BaseModel):
     sessions: list[ChatSession]
+
+
+# ── Team Summaries ─────────────────────────────────────────────
+
+class MemberSummary(BaseModel):
+    """Summary metrics for a team member."""
+    user_id: str
+    display_name: str
+    email: str
+    snapshots_count: int
+    commits_count: int
+    languages_used: list[str] = Field(default_factory=list)
+    files_modified: int = 0
+    status: str = "active"  # "active", "idle", "inactive"
+
+
+class TeamDailySummary(BaseModel):
+    """Daily summary for a team."""
+    team_id: str
+    period: str = "daily"
+    members: list[MemberSummary]
+    total_snapshots: int = 0
+    total_commits: int = 0
+    active_members: int = 0
+    generated_at: datetime
+
+
+class TeamWeeklySummary(BaseModel):
+    """Weekly summary for a team."""
+    team_id: str
+    period: str = "weekly"
+    members: list[MemberSummary]
+    total_snapshots: int = 0
+    total_commits: int = 0
+    active_members: int = 0
+    daily_breakdown: dict[str, int] = Field(default_factory=dict)  # day -> snapshot_count
+    generated_at: datetime
