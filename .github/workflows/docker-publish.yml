@@ -55,17 +55,6 @@ jobs:
       contents: read
 
     steps:
-      - name: Configure Backend PM guest settings
-        uses: azure/appservice-settings@v1
-        with:
-          app-name: sc-backend-suhaan
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_BACKEND }}
-          app-settings-json: |
-            [
-              { "name": "PM_GUEST_ENABLED", "value": "true", "slotSetting": false },
-              { "name": "PM_GUEST_TEAM_ID", "value": "8bf9b1dd-f598-46a1-907f-23aecc120aa2", "slotSetting": false }
-            ]
-
       - name: Deploy Backend to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
