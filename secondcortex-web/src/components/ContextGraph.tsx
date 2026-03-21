@@ -135,12 +135,13 @@ export default function ContextGraph({
 
     const recentSummaries = useMemo(() => {
         return timeline
-            .slice(selectedIndex, selectedIndex + 5)
+            .slice(Math.max(0, selectedIndex - 4), selectedIndex + 1)
             .map((snapshot) => ({
                 id: snapshot.id,
                 summary: snapshot.summary || 'No summary',
-                time: new Date(toTimestampMs(snapshot.timestamp)).toLocaleTimeString()
-            }));
+                time: new Date(toTimestampMs(snapshot.timestamp)).toLocaleTimeString(),
+            }))
+            .reverse();
     }, [timeline, selectedIndex]);
 
     useEffect(() => {
@@ -169,7 +170,7 @@ export default function ContextGraph({
         }
 
         setSelectedIndex(index);
-        setIsPinnedInPast(index > 0);
+        setIsPinnedInPast(index < timeline.length - 1);
         setLastEvent(`${new Date(toTimestampMs(snapshot.timestamp)).toLocaleTimeString()} - ${snapshot.summary || snapshot.active_file}`);
         postToHost({ type: 'previewSnapshot', snapshotId: snapshot.id });
     }, [timeline, postToHost]);
@@ -301,7 +302,7 @@ export default function ContextGraph({
                 const data = await response.json() as { timeline?: SnapshotEvent[] };
                 const rawTimeline = Array.isArray(data.timeline) ? data.timeline : [];
                 const nextTimeline = rawTimeline.slice().sort((a, b) => {
-                    return toTimestampMs(b.timestamp) - toTimestampMs(a.timestamp);
+                    return toTimestampMs(a.timestamp) - toTimestampMs(b.timestamp);
                 });
 
                 setTimeline(nextTimeline);
@@ -310,7 +311,7 @@ export default function ContextGraph({
                 if (nextTimeline.length > 0) {
                     setSelectedIndex((prevIndex) => {
                         if (!isPinnedInPast) {
-                            return 0;
+                            return nextTimeline.length - 1;
                         }
                         return Math.min(prevIndex, nextTimeline.length - 1);
                     });
@@ -334,6 +335,17 @@ export default function ContextGraph({
         setNodes(graph.nodes);
         setEdges(graph.edges);
     }, [selectedSnapshot, buildGraphForSnapshot, setNodes, setEdges]);
+
+    useEffect(() => {
+        if (!selectedSnapshot) {
+            setLastEvent('Waiting for snapshots...');
+            return;
+        }
+
+        setLastEvent(
+            `${new Date(toTimestampMs(selectedSnapshot.timestamp)).toLocaleTimeString()} - ${selectedSnapshot.summary || selectedSnapshot.active_file}`
+        );
+    }, [selectedSnapshot]);
 
     const selectedAgeLabel = selectedSnapshot
         ? (() => {
