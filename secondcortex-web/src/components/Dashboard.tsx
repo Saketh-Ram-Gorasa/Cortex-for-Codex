@@ -2,10 +2,13 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import SummaryWidget from '@/components/team/SummaryWidget';
+import PMGuestDashboard from '@/components/PMGuestDashboard';
 
 interface DashboardProps {
     token: string;
     backendUrl?: string;
+    mode?: 'developer' | 'pm';
+    isGuestPm?: boolean;
 }
 
 interface Stats {
@@ -32,8 +35,14 @@ function getUserIdFromToken(token: string): string | null {
 
 export default function Dashboard({ 
     token, 
-    backendUrl = 'https://sc-backend-suhaan.azurewebsites.net' 
+    backendUrl = 'https://sc-backend-suhaan.azurewebsites.net',
+    mode = 'developer',
+    isGuestPm = false,
 }: DashboardProps) {
+    if (mode === 'pm') {
+        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
+    }
+
     const userId = getUserIdFromToken(token);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
