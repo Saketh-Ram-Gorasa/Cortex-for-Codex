@@ -100,3 +100,35 @@ def test_provider_fallback_is_used_when_primary_fails(monkeypatch):
     assert result["provider"] == "groq"
     assert calls[0].startswith("azure_openai")
     assert calls[1].startswith("groq")
+
+
+def test_azure_404_retries_with_default_deployment(monkeypatch):
+    _configure_common(monkeypatch)
+    monkeypatch.setattr(llm_client.settings, "llm_provider_planner", "azure_openai")
+    monkeypatch.setattr(llm_client.settings, "llm_fallback_provider_planner", "")
+    monkeypatch.setattr(llm_client.settings, "azure_openai_deployment_planner", "missing-planner-deploy")
+    monkeypatch.setattr(llm_client.settings, "azure_openai_deployment", "chat-default")
+
+    calls: list[str] = []
+
+    async def fake_call_with_provider(*, provider, task, endpoint, model, payload, auth_variant="default"):
+        calls.append(model)
+        if model == "missing-planner-deploy":
+            raise RuntimeError("Error code: 404 - {'error': {'code': '404', 'message': 'Resource not found'}}")
+        return {"provider": provider, "model": model}
+
+    monkeypatch.setattr(llm_client, "_call_with_provider", fake_call_with_provider)
+
+    async def run():
+        route = llm_client.resolve_route("planner")
+        return await llm_client._call_with_fallbacks(
+            route=route,
+            endpoint="chat.completions",
+            payload={"messages": [{"role": "user", "content": "plan"}], "temperature": 0.2, "max_tokens": 20},
+        )
+
+    result = asyncio.run(run())
+    assert result["provider"] == "azure_openai"
+    assert result["model"] == "chat-default"
+    assert calls[0] == "missing-planner-deploy"
+    assert calls[1] == "chat-default"

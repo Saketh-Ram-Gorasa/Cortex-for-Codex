@@ -285,6 +285,45 @@ def _looks_like_rate_limit_error(exc: Exception) -> bool:
     return "429" in text or "rate limit" in text or "resource_exhausted" in text
 
 
+def _looks_like_not_found_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    not_found_markers = (
+        "404",
+        "resource not found",
+        "deploymentnotfound",
+        "not_found",
+    )
+    return any(marker in text for marker in not_found_markers)
+
+
+def _get_azure_alternate_models(task: str, primary_model: str) -> list[str]:
+    task = _normalize_task(task)
+    primary = (primary_model or "").strip()
+
+    candidates: list[str] = []
+
+    if task == EMBEDDING_TASK:
+        candidates.extend(
+            [
+                (settings.azure_openai_deployment_embeddings or "").strip(),
+                (settings.azure_openai_embedding_deployment or "").strip(),
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                (settings.azure_openai_deployment or "").strip(),
+                "gpt-4o",
+            ]
+        )
+
+    deduped: list[str] = []
+    for model in candidates:
+        if model and model != primary and model not in deduped:
+            deduped.append(model)
+    return deduped
+
+
 async def _call_with_provider(
     *,
     provider: str,
@@ -360,6 +399,37 @@ async def _call_with_fallbacks(
             route.model,
             primary_exc,
         )
+
+        # Azure model/deployment fallback: retry on 404 with alternate configured deployment names.
+        if route.provider == "azure_openai" and _looks_like_not_found_error(primary_exc):
+            alternate_models = _get_azure_alternate_models(route.task, route.model)
+            for alternate_model in alternate_models:
+                try:
+                    fallback_used = True
+                    _metric_inc("fallback_used", task=route.task, provider=route.provider)
+                    response = await _call_with_provider(
+                        provider=route.provider,
+                        task=route.task,
+                        endpoint=endpoint,
+                        model=alternate_model,
+                        payload=payload,
+                    )
+                    duration_ms = (time.perf_counter() - start) * 1000.0
+                    logger.warning(
+                        "LLM call recovered via Azure deployment fallback task=%s primary_model=%s fallback_model=%s latency_ms=%.1f",
+                        route.task,
+                        route.model,
+                        alternate_model,
+                        duration_ms,
+                    )
+                    return response
+                except Exception as alt_exc:
+                    logger.warning(
+                        "LLM Azure deployment fallback failed task=%s fallback_model=%s error=%s",
+                        route.task,
+                        alternate_model,
+                        alt_exc,
+                    )
 
         # Azure auth fallback: managed identity -> key for auth failures.
         if (
