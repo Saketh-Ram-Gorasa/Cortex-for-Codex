@@ -123,6 +123,42 @@ class UserDB:
                 CREATE INDEX IF NOT EXISTS idx_synced_snapshots_scope
                 ON synced_snapshots (team_id, user_id, timestamp DESC)
             """)
+            # Create teams table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS teams (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    team_lead_id TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (team_lead_id) REFERENCES users (id)
+                )
+            """)
+            # Create invite_codes table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS invite_codes (
+                    code TEXT PRIMARY KEY,
+                    team_id TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    used_by TEXT,
+                    used_at TIMESTAMP,
+                    FOREIGN KEY (team_id) REFERENCES teams (id),
+                    FOREIGN KEY (created_by) REFERENCES users (id),
+                    FOREIGN KEY (used_by) REFERENCES users (id)
+                )
+            """)
+            # Create team_members table for explicit membership tracking
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS team_members (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    team_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(team_id, user_id),
+                    FOREIGN KEY (team_id) REFERENCES teams (id),
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
             conn.commit()
 
     def create_chat_session(self, user_id: str, title: str = "New Chat") -> str:
@@ -373,3 +409,117 @@ class UserDB:
         if row:
             return row[0]
         return None
+
+    def create_team(self, team_id: str, name: str, team_lead_id: str) -> dict:
+        """Create a new team. Verify team_lead_id exists as a user first."""
+        with sqlite3.connect(self.db_path) as conn:
+            # Verify team lead exists
+            cursor = conn.execute("SELECT id FROM users WHERE id = ?", (team_lead_id,))
+            if not cursor.fetchone():
+                raise ValueError(f"User {team_lead_id} does not exist")
+            
+            conn.execute(
+                "INSERT INTO teams (id, name, team_lead_id) VALUES (?, ?, ?)",
+                (team_id, name, team_lead_id),
+            )
+            conn.commit()
+        return {"id": team_id, "name": name, "team_lead_id": team_lead_id}
+
+    def generate_invite_code(self, team_id: str, created_by: str) -> str:
+        """Generate a random 8-character invite code for a team."""
+        import secrets
+        import string
+        
+        code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        
+        with sqlite3.connect(self.db_path) as conn:
+            # Verify team exists
+            cursor = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,))
+            if not cursor.fetchone():
+                raise ValueError(f"Team {team_id} does not exist")
+            
+            conn.execute(
+                "INSERT INTO invite_codes (code, team_id, created_by) VALUES (?, ?, ?)",
+                (code, team_id, created_by),
+            )
+            conn.commit()
+        
+        return code
+
+    def join_team_with_code(self, user_id: str, code: str) -> bool:
+        """Join a team using an invite code. Returns True if successful."""
+        with sqlite3.connect(self.db_path) as conn:
+            # Check if code exists and is unused
+            cursor = conn.execute(
+                "SELECT team_id FROM invite_codes WHERE code = ? AND used_by IS NULL",
+                (code,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            
+            team_id = row[0]
+            
+            # Update user's team_id
+            conn.execute("UPDATE users SET team_id = ? WHERE id = ?", (team_id, user_id))
+            
+            # Mark code as used
+            conn.execute(
+                "UPDATE invite_codes SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ?",
+                (user_id, code),
+            )
+            
+            # Add to team_members table
+            conn.execute(
+                "INSERT INTO team_members (team_id, user_id) VALUES (?, ?)",
+                (team_id, user_id),
+            )
+            
+            conn.commit()
+        return True
+
+    def get_team_members(self, team_id: str) -> list[dict]:
+        """Get all members of a team."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT u.id, u.email, u.display_name, u.created_at 
+                FROM users u
+                INNER JOIN team_members tm ON u.id = tm.user_id
+                WHERE tm.team_id = ?
+                ORDER BY tm.joined_at ASC
+                """,
+                (team_id,),
+            )
+            rows = cursor.fetchall()
+            return [
+                {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
+                for r in rows
+            ]
+
+    def get_team_info(self, team_id: str) -> dict | None:
+        """Get team info including lead and member count."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, name, team_lead_id, created_at FROM teams WHERE id = ?
+                """,
+                (team_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            # Get member count
+            count_cursor = conn.execute(
+                "SELECT COUNT(*) FROM team_members WHERE team_id = ?", (team_id,)
+            )
+            member_count = count_cursor.fetchone()[0]
+            
+            return {
+                "id": row[0],
+                "name": row[1],
+                "team_lead_id": row[2],
+                "created_at": row[3],
+                "member_count": member_count,
+            }
