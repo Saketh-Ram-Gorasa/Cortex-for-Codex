@@ -17,6 +17,8 @@ interface Stats {
     activeProject: string;
 }
 
+const DASHBOARD_STATS_CACHE_TTL_MS = 2 * 60 * 1000;
+
 function toTimestampMs(value: string | number | null | undefined): number {
     if (typeof value === 'number') {
         return value > 1_000_000_000_000 ? value : value * 1000;
@@ -75,33 +77,84 @@ export default function Dashboard({
                         return bTs - aTs;
                     });
                     const latest = sortedTimeline[0];
-                    setStats(prev => ({
-                        ...prev,
+                    const nextStats: Stats = {
                         totalSnapshots: data.timeline.length,
                         lastSnapshotTime: latest?.timestamp ?? null,
-                    }));
+                        activeProject: 'SecondCortex Labs',
+                    };
+                    setStats(nextStats);
+
+                    if (typeof window !== 'undefined' && userId) {
+                        sessionStorage.setItem(
+                            `sc:dashboard:stats:${userId}`,
+                            JSON.stringify({ savedAt: Date.now(), data: nextStats }),
+                        );
+                    }
                 } else {
-                    setStats(prev => ({
-                        ...prev,
+                    const emptyStats: Stats = {
                         totalSnapshots: 0,
                         lastSnapshotTime: null,
-                    }));
+                        activeProject: 'SecondCortex Labs',
+                    };
+                    setStats(emptyStats);
+
+                    if (typeof window !== 'undefined' && userId) {
+                        sessionStorage.setItem(
+                            `sc:dashboard:stats:${userId}`,
+                            JSON.stringify({ savedAt: Date.now(), data: emptyStats }),
+                        );
+                    }
                 }
             }
         } catch (err) {
             console.error("Failed to fetch stats", err);
         }
-    }, [backendUrl, token]);
+    }, [backendUrl, token, userId]);
 
     useEffect(() => {
         if (mode === 'pm') {
             return;
         }
 
-        fetchStats();
-        const intervalId = window.setInterval(fetchStats, 5000);
-        return () => window.clearInterval(intervalId);
-    }, [fetchStats, mode]);
+        let shouldFetchImmediately = true;
+        let deferPollingByMs = 0;
+
+        if (typeof window !== 'undefined' && userId) {
+            const cached = sessionStorage.getItem(`sc:dashboard:stats:${userId}`);
+            if (cached) {
+                try {
+                    const parsed = JSON.parse(cached) as { savedAt?: number; data?: Stats };
+                    if (parsed.savedAt && parsed.data && Date.now() - parsed.savedAt < DASHBOARD_STATS_CACHE_TTL_MS) {
+                        setStats(parsed.data);
+                        shouldFetchImmediately = false;
+                        deferPollingByMs = DASHBOARD_STATS_CACHE_TTL_MS - (Date.now() - parsed.savedAt);
+                    }
+                } catch {}
+            }
+        }
+
+        let intervalId: number | undefined;
+        let timeoutId: number | undefined;
+
+        if (shouldFetchImmediately) {
+            fetchStats();
+            intervalId = window.setInterval(fetchStats, 5000);
+        } else {
+            timeoutId = window.setTimeout(() => {
+                fetchStats();
+                intervalId = window.setInterval(fetchStats, 5000);
+            }, Math.max(0, deferPollingByMs));
+        }
+
+        return () => {
+            if (timeoutId) {
+                window.clearTimeout(timeoutId);
+            }
+            if (intervalId) {
+                window.clearInterval(intervalId);
+            }
+        };
+    }, [fetchStats, mode, userId]);
 
     if (mode === 'pm') {
         return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;

@@ -19,8 +19,10 @@ export async function fetchAndCacheDecision(
     }
 
     const result = await deduplicator.deduplicate(cacheKey, async () => {
+        const relativeFilePath = vscode.workspace.asRelativePath(document.uri.fsPath).replace(/\\/g, '/');
+
         const response = await client.getDecisionArchaeology({
-            filePath: document.uri.fsPath,
+            filePath: relativeFilePath,
             symbolName: symbol.name,
             signature: symbol.signature,
             commitHash: blame.commitHash,

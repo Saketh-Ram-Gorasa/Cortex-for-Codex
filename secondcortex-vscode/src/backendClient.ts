@@ -288,6 +288,8 @@ export class BackendClient {
         summary: string;
         entities: string[];
         shadow_graph: string;
+        active_symbol?: string;
+        function_signatures?: string[];
     } | null> {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/snapshots/${encodeURIComponent(snapshotId)}`, {

@@ -30,6 +30,8 @@ interface SummaryWidgetProps {
   backendUrl?: string;
 }
 
+const SUMMARY_CACHE_TTL_MS = 2 * 60 * 1000;
+
 /**
  * Reusable summary widget that can be embedded in:
  * - Team Dashboard
@@ -62,6 +64,20 @@ export default function SummaryWidget({
           return;
         }
 
+        const cacheKey = `sc:summary:${teamId ? `team:${teamId}` : `user:${userId}`}:${period}`;
+        const cached = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
+
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached) as { savedAt?: number; data?: SummaryResponse };
+            if (parsed.savedAt && parsed.data && Date.now() - parsed.savedAt < SUMMARY_CACHE_TTL_MS) {
+              setSummary(parsed.data);
+              setLoading(false);
+              return;
+            }
+          } catch {}
+        }
+
         const response = await fetch(`${backendUrl}${endpoint}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -72,6 +88,10 @@ export default function SummaryWidget({
 
         const data = await response.json();
         setSummary(data);
+
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), data }));
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
