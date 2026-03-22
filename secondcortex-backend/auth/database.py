@@ -571,9 +571,45 @@ class UserDB:
                 (team_id,),
             )
             rows = cursor.fetchall()
+            if rows:
+                return [
+                    {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
+                    for r in rows
+                ]
+
+            # Fallback 1: users table team_id assignment.
+            fallback_users = conn.execute(
+                """
+                SELECT id, email, display_name, created_at
+                FROM users
+                WHERE team_id = ?
+                ORDER BY created_at ASC
+                """,
+                (team_id,),
+            ).fetchall()
+            if fallback_users:
+                return [
+                    {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
+                    for r in fallback_users
+                ]
+
+            # Fallback 2: infer members from snapshot history in this team scope.
+            snapshot_users = conn.execute(
+                """
+                SELECT u.id, u.email, u.display_name, u.created_at
+                FROM users u
+                INNER JOIN (
+                    SELECT DISTINCT user_id
+                    FROM synced_snapshots
+                    WHERE team_id = ?
+                ) ss ON ss.user_id = u.id
+                ORDER BY u.created_at ASC
+                """,
+                (team_id,),
+            ).fetchall()
             return [
                 {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
-                for r in rows
+                for r in snapshot_users
             ]
 
     def get_team_info(self, team_id: str) -> dict | None:
