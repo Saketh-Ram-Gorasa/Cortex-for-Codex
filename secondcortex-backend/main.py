@@ -555,31 +555,42 @@ async def ingest_git_history(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Git ingest failed: {exc}")
 
-    ingested_count = 0
-    for record in records:
-        metadata = MemoryMetadata(
-            operation=MemoryOperation.ADD,
-            entities=[record.active_file, record.git_branch],
-            relations=[],
-            summary=record.summary,
-        )
+    concurrency_limit = min(8, max(1, len(records)))
+    semaphore = asyncio.Semaphore(concurrency_limit)
 
-        stored = StoredSnapshot(
-            id=record.id,
-            timestamp=record.timestamp,
-            workspace_folder=record.workspace_folder,
-            active_file=record.active_file,
-            language_id=record.language_id,
-            shadow_graph=record.shadow_graph,
-            git_branch=record.git_branch,
-            terminal_commands=record.terminal_commands,
-            metadata=metadata,
-        )
-        stored.embedding = await vector_db.generate_embedding(
-            f"{record.summary}\n{record.shadow_graph[:4000]}"
-        )
-        await vector_db.upsert_snapshot(stored, user_id=user_id)
-        ingested_count += 1
+    async def _ingest_record(record: StoredSnapshot) -> bool:
+        async with semaphore:
+            try:
+                metadata = MemoryMetadata(
+                    operation=MemoryOperation.ADD,
+                    entities=[record.active_file, record.git_branch],
+                    relations=[],
+                    summary=record.summary,
+                )
+
+                stored = StoredSnapshot(
+                    id=record.id,
+                    timestamp=record.timestamp,
+                    workspace_folder=record.workspace_folder,
+                    active_file=record.active_file,
+                    language_id=record.language_id,
+                    shadow_graph=record.shadow_graph,
+                    git_branch=record.git_branch,
+                    terminal_commands=record.terminal_commands,
+                    metadata=metadata,
+                )
+                stored.embedding = await vector_db.generate_embedding(
+                    f"{record.summary}\n{record.shadow_graph[:4000]}"
+                )
+                await vector_db.upsert_snapshot(stored, user_id=user_id)
+                return True
+            except Exception as exc:
+                summary.warnings.append(f"Failed to ingest record {record.id}: {exc}")
+                logger.warning("Retro ingest record failed (id=%s, user=%s): %s", record.id, user_id, exc)
+                return False
+
+    ingestion_results = await asyncio.gather(*[_ingest_record(record) for record in records])
+    ingested_count = sum(1 for ok in ingestion_results if ok)
 
     return RetroIngestResponse(
         status="ok",

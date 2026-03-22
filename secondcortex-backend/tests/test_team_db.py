@@ -101,6 +101,7 @@ def test_get_team_members():
     
     members = db.get_team_members(team_id)
     
-    assert len(members) == 2
+    assert len(members) == 3
+    assert team_lead_id in [m["id"] for m in members]
     assert user1_id in [m["id"] for m in members]
     assert user2_id in [m["id"] for m in members]

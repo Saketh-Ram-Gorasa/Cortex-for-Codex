@@ -12,6 +12,7 @@ import logging
 import json
 import hashlib
 import random
+import time
 from typing import Any
 
 import chromadb
@@ -34,6 +35,63 @@ class VectorDBService:
         except Exception as exc:
             logger.error("ChromaDB initialization failed: %s", exc)
             self.chroma_client = None
+        self._query_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._cache_ttl_seconds = 30
+
+    def _cache_key(
+        self,
+        prefix: str,
+        user_id: str | None,
+        project_id: str | None,
+        *parts: Any,
+    ) -> str:
+        serialized = "::".join(str(part) for part in parts)
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        return f"{prefix}::{user_id or 'default'}::{project_id or 'all'}::{digest}"
+
+    def _cache_get(self, key: str) -> list[dict[str, Any]] | None:
+        hit = self._query_cache.get(key)
+        if not hit:
+            return None
+
+        expires_at, payload = hit
+        if expires_at <= time.time():
+            self._query_cache.pop(key, None)
+            return None
+
+        return [dict(item) for item in payload]
+
+    def _cache_set(self, key: str, payload: list[dict[str, Any]]) -> None:
+        self._query_cache[key] = (
+            time.time() + self._cache_ttl_seconds,
+            [dict(item) for item in payload],
+        )
+
+    def _clear_user_cache(self, user_id: str | None) -> None:
+        token = f"::{user_id or 'default'}::"
+        stale_keys = [key for key in self._query_cache if token in key]
+        for key in stale_keys:
+            self._query_cache.pop(key, None)
+
+    def _timestamp_sort_key(self, value: Any) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return 0.0
+            try:
+                return float(raw)
+            except ValueError:
+                pass
+            try:
+                from datetime import datetime
+
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return dt.timestamp()
+            except Exception:
+                return 0.0
+        return 0.0
 
     # ── Per-User Collection ────────────────────────────────────
 
@@ -139,6 +197,7 @@ class VectorDBService:
                 metadatas=[metadata],
                 documents=[str(snapshot.shadow_graph or "")]
             )
+            self._clear_user_cache(user_id)
             logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
         except Exception as exc:
             logger.error("Upsert to ChromaDB failed: %s", exc)
@@ -155,6 +214,11 @@ class VectorDBService:
         if collection is None:
             logger.warning("Chroma collection not available — returning empty results.")
             return []
+
+        cache_key = self._cache_key("semantic", user_id, project_id, query, top_k)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
 
         try:
             # Generate embedding for the query
@@ -178,15 +242,18 @@ class VectorDBService:
                 metadatas_list = results["metadatas"][0]
                 if metadatas_list is not None:
                     items = [dict(meta) for meta in metadatas_list]
-                    if project_id:
-                        return [item for item in items if str(item.get("project_id") or "") == str(project_id)]
+                    self._cache_set(cache_key, items)
                     return items
 
-            return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+            fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+            self._cache_set(cache_key, fallback)
+            return fallback
 
         except Exception as exc:
             logger.error("Semantic search failed: %s", exc)
-            return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+            fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+            self._cache_set(cache_key, fallback)
+            return fallback
 
     async def get_recent_snapshots(
             self,
@@ -204,30 +271,39 @@ class VectorDBService:
             logger.warning("Chroma collection not available — returning empty results.")
             return []
 
+        cache_key = self._cache_key("recent", user_id, project_id, limit)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         try:
-            # Fetch everything, sort by timestamp, return newest N.
-            # ChromaDB offset does NOT guarantee insertion order.
             total = collection.count() or 0
+            if total <= 0:
+                return []
+
+            fetch_limit = min(total, max(limit * 3, 500))
+            get_kwargs: dict[str, Any] = {
+                "limit": fetch_limit,
+                "include": ["metadatas"],
+            }
+            if project_id:
+                get_kwargs["where"] = {"project_id": str(project_id)}
+
             results = collection.get(
-                limit=total if total > 0 else 1,
-                include=["metadatas", "documents"]
+                **get_kwargs
             )
 
             if results and results.get("metadatas"):
-                metadatas = results["metadatas"]
-                if project_id:
-                    metadatas = [
-                        meta
-                        for meta in metadatas
-                        if str((meta or {}).get("project_id") or "") == str(project_id)
-                    ]
+                metadatas = [dict(meta) for meta in results["metadatas"] if meta]
 
                 sorted_metas = sorted(
                     metadatas,
-                    key=lambda m: m.get("timestamp", ""),
+                    key=lambda m: self._timestamp_sort_key(m.get("timestamp")),
                     reverse=True
                 )
-                return [dict(meta) for meta in sorted_metas[:limit]]
+                output = sorted_metas[:limit]
+                self._cache_set(cache_key, output)
+                return output
 
             return []
 
@@ -247,6 +323,11 @@ class VectorDBService:
             logger.warning("Chroma collection not available — returning empty timeline.")
             return []
 
+        cache_key = self._cache_key("timeline", user_id, project_id, limit)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         try:
             total = collection.count() or 0
             if total == 0:
@@ -254,35 +335,23 @@ class VectorDBService:
             
             # Fetch only what we need + some buffer for sorting
             fetch_limit = min(total, max(limit * 3, 500))
-            results = collection.get(
-                limit=fetch_limit,
-                include=["metadatas"]
-            )
+            get_kwargs: dict[str, Any] = {
+                "limit": fetch_limit,
+                "include": ["metadatas"],
+            }
+            if project_id:
+                get_kwargs["where"] = {"project_id": str(project_id)}
+
+            results = collection.get(**get_kwargs)
             if not results or not results.get("metadatas"):
                 return []
 
             metadatas = [dict(meta) for meta in results["metadatas"] if meta]
-            if project_id:
-                metadatas = [
-                    meta for meta in metadatas if str(meta.get("project_id") or "") == str(project_id)
-                ]
-            # Sort by timestamp (newest first) with proper numeric comparison
-            def get_sort_key(m: dict) -> float:
-                ts = m.get("timestamp", "")
-                if isinstance(ts, (int, float)):
-                    return float(ts)
-                # Try parsing ISO string to float unix timestamp
-                if isinstance(ts, str):
-                    try:
-                        from datetime import datetime
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        return dt.timestamp()
-                    except Exception:
-                        return 0.0
-                return 0.0
-            
-            metadatas.sort(key=get_sort_key, reverse=True)
-            return metadatas[:limit]
+
+            metadatas.sort(key=lambda meta: self._timestamp_sort_key(meta.get("timestamp")), reverse=True)
+            output = metadatas[:limit]
+            self._cache_set(cache_key, output)
+            return output
         except Exception as exc:
             logger.error("get_snapshot_timeline failed: %s", exc)
             return []
