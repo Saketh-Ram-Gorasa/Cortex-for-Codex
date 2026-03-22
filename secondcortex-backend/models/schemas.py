@@ -21,6 +21,7 @@ class SnapshotPayload(BaseModel):
     language_id: str = Field(..., alias="languageId")
     shadow_graph: str = Field(..., alias="shadowGraph")
     git_branch: str | None = Field(None, alias="gitBranch")
+    project_id: str | None = Field(None, alias="projectId")
     terminal_commands: list[str] = Field(default_factory=list, alias="terminalCommands")
     function_context: dict[str, Any] | None = Field(None, alias="functionContext")
 
@@ -229,6 +230,7 @@ class ArchaeologyRequest(BaseModel):
     commit_message: str = Field("", alias="commitMessage")
     author: str = ""
     timestamp: datetime
+    project_id: str | None = Field(None, alias="projectId")
 
     model_config = {"populate_by_name": True}
 
@@ -253,10 +255,38 @@ class StoredSnapshot(BaseModel):
     language_id: str
     shadow_graph: str
     git_branch: str | None = None
+    project_id: str | None = None
     terminal_commands: list[str] = Field(default_factory=list)
     function_context: dict[str, Any] | None = None
     metadata: MemoryMetadata | None = None
     embedding: list[float] | None = None
+
+
+class ProjectResolveRequest(BaseModel):
+    workspace_name: str = Field("", alias="workspaceName")
+    workspace_path_hash: str = Field("", alias="workspacePathHash")
+    repo_remote: str = Field("", alias="repoRemote")
+    team_id: str | None = Field(None, alias="teamId")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProjectResolveCandidate(BaseModel):
+    project_id: str = Field(..., alias="projectId")
+    name: str
+    confidence: float
+
+    model_config = {"populate_by_name": True}
+
+
+class ProjectResolveResponse(BaseModel):
+    status: Literal["resolved", "ambiguous", "unresolved"]
+    project_id: str | None = Field(None, alias="projectId")
+    confidence: float = 0.0
+    candidates: list[ProjectResolveCandidate] = Field(default_factory=list)
+    needs_selection: bool = Field(False, alias="needsSelection")
+
+    model_config = {"populate_by_name": True}
 
 # ── Chat History ────────────────────────────────────────────────
 

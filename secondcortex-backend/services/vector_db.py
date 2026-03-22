@@ -108,6 +108,7 @@ class VectorDBService:
                 "language_id": str(snapshot.language_id or ""),
                 "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
                 "git_branch": str(snapshot.git_branch or ""),
+                "project_id": str(snapshot.project_id or ""),
                 "terminal_commands": json.dumps(snapshot.terminal_commands or []),
                 "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
@@ -142,7 +143,13 @@ class VectorDBService:
         except Exception as exc:
             logger.error("Upsert to ChromaDB failed: %s", exc)
 
-    async def semantic_search(self, query: str, top_k: int = 5, user_id: str | None = None) -> list[dict]:
+    async def semantic_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        user_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict]:
         """Perform a vector semantic search over stored snapshots, scoped to the user."""
         collection = self._get_collection(user_id)
         if collection is None:
@@ -155,26 +162,38 @@ class VectorDBService:
 
             if not query_embedding:
                 logger.warning("No query embedding generated; falling back to recent snapshots.")
-                return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
+                return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
 
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k
-            )
+            query_kwargs: dict[str, Any] = {
+                "query_embeddings": [query_embedding],
+                "n_results": top_k,
+            }
+            if project_id:
+                query_kwargs["where"] = {"project_id": str(project_id)}
+
+            results = collection.query(**query_kwargs)
 
             # ChromaDB returns a dict of lists of lists. We only queried 1 embedding, so index 0
             if results and results.get("metadatas") and results["metadatas"]:
                 metadatas_list = results["metadatas"][0]
                 if metadatas_list is not None:
-                    return [dict(meta) for meta in metadatas_list]
+                    items = [dict(meta) for meta in metadatas_list]
+                    if project_id:
+                        return [item for item in items if str(item.get("project_id") or "") == str(project_id)]
+                    return items
 
-            return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
+            return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
 
         except Exception as exc:
             logger.error("Semantic search failed: %s", exc)
-            return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
+            return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
 
-    async def get_recent_snapshots(self, limit: int = 10, user_id: str | None = None) -> list[dict]:
+    async def get_recent_snapshots(
+            self,
+            limit: int = 10,
+            user_id: str | None = None,
+            project_id: str | None = None,
+    ) -> list[dict]:
         """Fetch the most recent snapshots using direct retrieval (not vector search).
         
         This is used by the /api/v1/events endpoint for the live graph.
@@ -195,8 +214,16 @@ class VectorDBService:
             )
 
             if results and results.get("metadatas"):
+                metadatas = results["metadatas"]
+                if project_id:
+                    metadatas = [
+                        meta
+                        for meta in metadatas
+                        if str((meta or {}).get("project_id") or "") == str(project_id)
+                    ]
+
                 sorted_metas = sorted(
-                    results["metadatas"],
+                    metadatas,
                     key=lambda m: m.get("timestamp", ""),
                     reverse=True
                 )
@@ -208,7 +235,12 @@ class VectorDBService:
             logger.error("get_recent_snapshots failed: %s", exc)
             return []
 
-    async def get_snapshot_timeline(self, limit: int = 200, user_id: str | None = None) -> list[dict]:
+    async def get_snapshot_timeline(
+        self,
+        limit: int = 200,
+        user_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict]:
         """Fetch a chronologically sorted timeline of snapshot metadata (newest first)."""
         collection = self._get_collection(user_id)
         if collection is None:
@@ -230,6 +262,10 @@ class VectorDBService:
                 return []
 
             metadatas = [dict(meta) for meta in results["metadatas"] if meta]
+            if project_id:
+                metadatas = [
+                    meta for meta in metadatas if str(meta.get("project_id") or "") == str(project_id)
+                ]
             # Sort by timestamp (newest first) with proper numeric comparison
             def get_sort_key(m: dict) -> float:
                 ts = m.get("timestamp", "")

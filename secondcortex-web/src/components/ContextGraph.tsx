@@ -99,12 +99,14 @@ interface ContextGraphProps {
     backendUrl?: string;
     token?: string;
     onUnauthorized?: () => void;
+    selectedProjectId?: string | null;
 }
 
 export default function ContextGraph({
     backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
     token = '',
     onUnauthorized,
+    selectedProjectId,
 }: ContextGraphProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -282,7 +284,8 @@ export default function ContextGraph({
 
         const pollTimeline = async () => {
             try {
-                const response = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=500`, {
+                const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
+                const response = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=500${projectQuery}`, {
                     headers: { Authorization: `Bearer ${token}` },
                 });
 
@@ -328,7 +331,7 @@ export default function ContextGraph({
             cancelled = true;
             window.clearInterval(intervalId);
         };
-    }, [backendUrl, token, onUnauthorized, isPinnedInPast]);
+    }, [backendUrl, token, onUnauthorized, isPinnedInPast, selectedProjectId]);
 
     useEffect(() => {
         const graph = buildGraphForSnapshot(selectedSnapshot);

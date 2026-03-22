@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from auth.database import UserDB
 from auth.jwt_handler import get_current_principal, get_current_user
+from projects.routes import project_db
 
 logger = logging.getLogger("secondcortex.teams.routes")
 
@@ -57,6 +58,7 @@ class MemberSnapshot(BaseModel):
     id: str
     user_id: str
     team_id: str | None = None
+    project_id: str | None = None
     workspace: str
     active_file: str
     git_branch: str | None = None
@@ -185,6 +187,7 @@ async def get_member_snapshots(
     team_id: str,
     member_id: str,
     limit: int = 1000,
+    projectId: str | None = None,
     principal: dict = Depends(get_current_principal),
 ):
     """
@@ -200,6 +203,24 @@ async def get_member_snapshots(
     _authorize_team_read(team_id, principal, user_db)
     if member_team != team_id:
         raise HTTPException(status_code=403, detail="Target member is not part of this team")
+
+    if projectId:
+        role = str(principal.get("role") or "user")
+        if role == "pm_guest":
+            guest_team_id = str(principal.get("team_id") or "")
+            project = project_db.get_project_by_id(projectId)
+            if not project or project.get("visibility") != "team" or project.get("team_id") != guest_team_id:
+                raise HTTPException(status_code=403, detail="Not authorized to access this project")
+        else:
+            requester_user_id = str(principal.get("sub") or "")
+            requester = user_db.get_user_by_id(requester_user_id) if requester_user_id else None
+            requester_team_id = requester.get("team_id") if requester else None
+            if not project_db.user_can_access_project(
+                user_id=requester_user_id,
+                team_id=requester_team_id,
+                project_id=projectId,
+            ):
+                raise HTTPException(status_code=403, detail="Not authorized to access this project")
 
     rows = user_db.get_user_snapshots(member_id, limit=limit)
     snapshots: list[MemberSnapshot] = []
@@ -234,6 +255,7 @@ async def get_member_snapshots(
                 id=str(row.get("id")),
                 user_id=str(row.get("user_id")),
                 team_id=row.get("team_id"),
+                project_id=row.get("project_id"),
                 workspace=str(row.get("workspace") or ""),
                 active_file=str(row.get("active_file") or ""),
                 git_branch=row.get("git_branch"),
@@ -244,5 +266,8 @@ async def get_member_snapshots(
                 synced=int(row.get("synced") or 0),
             )
         )
+
+    if projectId:
+        return [snapshot for snapshot in snapshots if snapshot.project_id == projectId]
 
     return snapshots

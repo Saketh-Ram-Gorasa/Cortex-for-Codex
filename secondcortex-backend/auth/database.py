@@ -103,6 +103,7 @@ class UserDB:
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     team_id TEXT,
+                    project_id TEXT,
                     workspace TEXT NOT NULL,
                     active_file TEXT NOT NULL,
                     git_branch TEXT,
@@ -117,6 +118,10 @@ class UserDB:
             """)
             try:
                 conn.execute("ALTER TABLE synced_snapshots ADD COLUMN enriched_context TEXT NOT NULL DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE synced_snapshots ADD COLUMN project_id TEXT")
             except sqlite3.OperationalError:
                 pass
             conn.execute("""
@@ -333,12 +338,13 @@ class UserDB:
             conn.execute(
                 """
                 INSERT INTO synced_snapshots (
-                    id, user_id, team_id, workspace, active_file, git_branch,
+                    id, user_id, team_id, project_id, workspace, active_file, git_branch,
                     terminal_commands, summary, enriched_context, timestamp, synced
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=excluded.user_id,
                     team_id=excluded.team_id,
+                    project_id=excluded.project_id,
                     workspace=excluded.workspace,
                     active_file=excluded.active_file,
                     git_branch=excluded.git_branch,
@@ -352,6 +358,7 @@ class UserDB:
                     row.get("id"),
                     row.get("user_id"),
                     row.get("team_id"),
+                    row.get("project_id"),
                     row.get("workspace"),
                     row.get("active_file"),
                     row.get("git_branch"),
@@ -375,7 +382,7 @@ class UserDB:
             for member_id in member_ids:
                 cursor = conn.execute(
                     """
-                    SELECT id, user_id, team_id, workspace, active_file, git_branch,
+                    SELECT id, user_id, team_id, project_id, workspace, active_file, git_branch,
                               terminal_commands, summary, enriched_context, timestamp, synced
                     FROM synced_snapshots
                     WHERE user_id = ?
@@ -389,14 +396,15 @@ class UserDB:
                         "id": row[0],
                         "user_id": row[1],
                         "team_id": row[2],
-                        "workspace": row[3],
-                        "active_file": row[4],
-                        "git_branch": row[5],
-                        "terminal_commands": row[6],
-                        "summary": row[7],
-                        "enriched_context": row[8],
-                        "timestamp": row[9],
-                        "synced": row[10],
+                        "project_id": row[3],
+                        "workspace": row[4],
+                        "active_file": row[5],
+                        "git_branch": row[6],
+                        "terminal_commands": row[7],
+                        "summary": row[8],
+                        "enriched_context": row[9],
+                        "timestamp": row[10],
+                        "synced": row[11],
                     })
 
         all_rows.sort(key=lambda r: int(r.get("timestamp") or 0), reverse=True)
@@ -410,7 +418,7 @@ class UserDB:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT id, user_id, team_id, workspace, active_file, git_branch,
+                SELECT id, user_id, team_id, project_id, workspace, active_file, git_branch,
                           terminal_commands, summary, enriched_context, timestamp, synced
                 FROM synced_snapshots
                 WHERE user_id = ?
@@ -424,14 +432,15 @@ class UserDB:
                     "id": row[0],
                     "user_id": row[1],
                     "team_id": row[2],
-                    "workspace": row[3],
-                    "active_file": row[4],
-                    "git_branch": row[5],
-                    "terminal_commands": row[6],
-                    "summary": row[7],
-                    "enriched_context": row[8],
-                    "timestamp": row[9],
-                    "synced": row[10],
+                    "project_id": row[3],
+                    "workspace": row[4],
+                    "active_file": row[5],
+                    "git_branch": row[6],
+                    "terminal_commands": row[7],
+                    "summary": row[8],
+                    "enriched_context": row[9],
+                    "timestamp": row[10],
+                    "synced": row[11],
                 })
 
         return rows

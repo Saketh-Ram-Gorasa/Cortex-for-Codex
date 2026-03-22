@@ -44,6 +44,7 @@ from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
 from auth.jwt_handler import get_current_principal, get_current_user
 from auth.routes import router as auth_router
+from projects.routes import router as projects_router, project_db
 from teams.routes import router as teams_router
 from teams.summary_routes import router as summary_router
 from config import settings
@@ -128,6 +129,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # ── Include auth routes ─────────────────────────────────────────
 app.include_router(auth_router)
+app.include_router(projects_router)
 app.include_router(teams_router)
 app.include_router(summary_router)
 
@@ -396,6 +398,16 @@ def _principal_scopes(principal: dict) -> set[str]:
     return {str(scope) for scope in scopes}
 
 
+def _require_project_access(user_id: str, project_id: str | None) -> None:
+    if not project_id:
+        return
+
+    user = user_db.get_user_by_id(user_id)
+    team_id = user.get("team_id") if user else None
+    if not project_db.user_can_access_project(user_id=user_id, team_id=team_id, project_id=project_id):
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+
 async def _resolve_resurrection_snapshot(target: str, user_id: str) -> dict | None:
     normalized_target = (target or "").strip()
     if not normalized_target:
@@ -507,6 +519,9 @@ async def receive_snapshot(
     Receive a sanitized IDE snapshot from the VS Code extension.
     Returns 200 OK instantly, then processes asynchronously via Retriever.
     """
+    if settings.project_scoped_ingestion_enabled and not payload.project_id:
+        raise HTTPException(status_code=400, detail="projectId is required when project scoped ingestion is enabled")
+
     logger.info("Received snapshot for file: %s (user=%s)", payload.active_file, user_id)
 
     background_tasks.add_task(retriever.process_snapshot, payload, user_id)
@@ -580,12 +595,16 @@ async def ingest_git_history(
 
 
 @app.get("/api/v1/events")
-async def get_events(user_id: str = Depends(get_current_user)):
+async def get_events(
+    projectId: str | None = None,
+    user_id: str = Depends(get_current_user),
+):
     """
     Endpoint for the Next.js React Flow to poll recent snapshots.
     Scoped to the authenticated user's collection.
     """
-    results = await vector_db.get_recent_snapshots(limit=10, user_id=user_id)
+    _require_project_access(user_id=user_id, project_id=projectId)
+    results = await vector_db.get_recent_snapshots(limit=10, user_id=user_id, project_id=projectId)
 
     events = []
     for r in results:
@@ -594,6 +613,7 @@ async def get_events(user_id: str = Depends(get_current_user)):
             "timestamp": r.get("timestamp"),
             "active_file": r.get("active_file"),
             "git_branch": r.get("git_branch"),
+            "project_id": r.get("project_id") or None,
             "summary": r.get("summary"),
             "entities": r.get("entities", "").split(",") if r.get("entities") else [],
             "relations": []
@@ -605,11 +625,13 @@ async def get_events(user_id: str = Depends(get_current_user)):
 @app.get("/api/v1/snapshots/timeline")
 async def get_snapshot_timeline(
     limit: int = 200,
+    projectId: str | None = None,
     user_id: str = Depends(get_current_user),
 ):
     """Timeline feed for Shadow Graph time-travel (oldest -> newest)."""
+    _require_project_access(user_id=user_id, project_id=projectId)
     capped_limit = max(1, min(limit, 1000))
-    results = await vector_db.get_snapshot_timeline(limit=capped_limit, user_id=user_id)
+    results = await vector_db.get_snapshot_timeline(limit=capped_limit, user_id=user_id, project_id=projectId)
 
     timeline = []
     for r in results:
@@ -618,6 +640,7 @@ async def get_snapshot_timeline(
             "timestamp": r.get("timestamp"),
             "active_file": r.get("active_file"),
             "git_branch": r.get("git_branch"),
+            "project_id": r.get("project_id") or None,
             "summary": r.get("summary"),
             "entities": r.get("entities", "").split(",") if r.get("entities") else [],
         })
@@ -634,6 +657,7 @@ async def get_snapshot_by_id(
     snapshot = await vector_db.get_snapshot_by_id(snapshot_id=snapshot_id, user_id=user_id)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Snapshot not found")
+    _require_project_access(user_id=user_id, project_id=snapshot.get("project_id") or None)
 
     return {
         "snapshot": {
@@ -642,6 +666,7 @@ async def get_snapshot_by_id(
             "workspace_folder": snapshot.get("workspace_folder"),
             "active_file": snapshot.get("active_file"),
             "git_branch": snapshot.get("git_branch"),
+            "project_id": snapshot.get("project_id") or None,
             "summary": snapshot.get("summary"),
             "entities": snapshot.get("entities", "").split(",") if snapshot.get("entities") else [],
             "active_symbol": snapshot.get("active_symbol"),
@@ -827,6 +852,7 @@ async def decision_archaeology(
         request.file_path,
         user_id,
     )
+    _require_project_access(user_id=user_id, project_id=request.project_id)
 
     query = (
         f"File: {request.file_path}\n"
@@ -843,13 +869,18 @@ async def decision_archaeology(
     time_window_end = anchor_timestamp + timedelta(hours=1)
 
     # Bound expensive retrieval to keep hover interactions responsive.
-    timeline_task = asyncio.create_task(vector_db.get_snapshot_timeline(limit=800, user_id=user_id))
-    semantic_task = asyncio.create_task(vector_db.semantic_search(query=query, top_k=6, user_id=user_id))
+    timeline_task = asyncio.create_task(
+        vector_db.get_snapshot_timeline(limit=800, user_id=user_id, project_id=request.project_id)
+    )
+    semantic_task = asyncio.create_task(
+        vector_db.semantic_search(query=query, top_k=6, user_id=user_id, project_id=request.project_id)
+    )
     symbol_task = asyncio.create_task(
         vector_db.semantic_search(
             query=f"function {request.symbol_name} implementation decision {request.commit_hash}",
             top_k=4,
             user_id=user_id,
+            project_id=request.project_id,
         )
     )
 
@@ -872,6 +903,8 @@ async def decision_archaeology(
 
     time_filtered: list[dict] = []
     for snapshot in timeline:
+        if request.project_id and str(snapshot.get("project_id") or "") != str(request.project_id):
+            continue
         if not _paths_match(snapshot.get("active_file"), request.file_path):
             continue
 
@@ -885,10 +918,12 @@ async def decision_archaeology(
     semantic_file_filtered = [
         s for s in semantic_results
         if _paths_match(s.get("active_file"), request.file_path)
+        and (not request.project_id or str(s.get("project_id") or "") == str(request.project_id))
     ]
     symbol_file_filtered = [
         s for s in symbol_results
         if _paths_match(s.get("active_file"), request.file_path)
+        and (not request.project_id or str(s.get("project_id") or "") == str(request.project_id))
     ]
 
     all_results = _deduplicate_snapshots(

@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import SummaryWidget from '@/components/team/SummaryWidget';
 import PMGuestDashboard from '@/components/PMGuestDashboard';
+import ProjectManager from '@/components/ProjectManager';
+import ProjectSelector from '@/components/ProjectSelector';
 
 interface DashboardProps {
     token: string;
@@ -10,6 +12,8 @@ interface DashboardProps {
     mode?: 'developer' | 'pm';
     isGuestPm?: boolean;
     isGuestDeveloper?: boolean;
+    selectedProjectId: string | null;
+    onSelectedProjectChange: (projectId: string | null) => void;
 }
 
 interface Stats {
@@ -44,12 +48,15 @@ export default function Dashboard({
     mode = 'developer',
     isGuestPm = false,
     isGuestDeveloper = false,
+    selectedProjectId,
+    onSelectedProjectChange,
 }: DashboardProps) {
     if (mode === 'pm') {
         return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
     }
 
     const userId = getUserIdFromToken(token);
+    const [showProjectManager, setShowProjectManager] = useState(false);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
@@ -58,7 +65,8 @@ export default function Dashboard({
 
     const fetchStats = useCallback(async () => {
         try {
-            const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000`, {
+            const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
+            const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000${projectQuery}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
@@ -69,19 +77,21 @@ export default function Dashboard({
                         ...prev,
                         totalSnapshots: data.timeline.length,
                         lastSnapshotTime: latest?.timestamp ?? null,
+                        activeProject: selectedProjectId ? 'Selected Project' : 'All Projects',
                     }));
                 } else {
                     setStats(prev => ({
                         ...prev,
                         totalSnapshots: 0,
                         lastSnapshotTime: null,
+                        activeProject: selectedProjectId ? 'Selected Project' : 'All Projects',
                     }));
                 }
             }
         } catch (err) {
             console.error("Failed to fetch stats", err);
         }
-    }, [backendUrl, token]);
+    }, [backendUrl, token, selectedProjectId]);
 
     useEffect(() => {
         fetchStats();
@@ -97,7 +107,31 @@ export default function Dashboard({
                     <h1 className="section-title">Developer Dashboard</h1>
                     <p className="section-desc">View your SecondCortex memory system stats and activity summaries.</p>
                     {isGuestDeveloper && <p className="pm-mode-chip">Guest Session: Suhaan</p>}
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                        <ProjectSelector
+                            token={token}
+                            backendUrl={backendUrl}
+                            selectedProjectId={selectedProjectId}
+                            onChange={onSelectedProjectChange}
+                        />
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setShowProjectManager(true)}
+                        >
+                            My Projects
+                        </button>
+                    </div>
                 </div>
+
+                {showProjectManager && (
+                    <ProjectManager
+                        token={token}
+                        backendUrl={backendUrl}
+                        onClose={() => setShowProjectManager(false)}
+                        onProjectsChanged={fetchStats}
+                    />
+                )}
 
                 <div className="sc-stats-grid">
                     <StatCard 
@@ -129,6 +163,7 @@ export default function Dashboard({
                                         period="daily"
                                         context="individual"
                                         token={token}
+                                        selectedProjectId={selectedProjectId}
                                     />
                                 </div>
                                 <div className="sc-guide-card">
@@ -137,6 +172,7 @@ export default function Dashboard({
                                         period="weekly"
                                         context="individual"
                                         token={token}
+                                        selectedProjectId={selectedProjectId}
                                     />
                                 </div>
                             </div>

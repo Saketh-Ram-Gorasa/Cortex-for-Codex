@@ -527,16 +527,16 @@ export default function LandingPage() {
           <div className="stat-label">Embedding Dimensions</div>
         </div>
         <div className="stat-item">
-          <div className="stat-num" data-target="11">
+          <div className="stat-num" data-target="7">
             0
           </div>
           <div className="stat-label">Technical Pivots Shipped</div>
         </div>
         <div className="stat-item">
-          <div className="stat-num" data-target="0" data-suffix="">
-            ~sub-second
+          <div className="stat-num" data-target="2" data-suffix="s">
+            0s
           </div>
-          <div className="stat-label">Context Retrieval</div>
+          <div className="stat-label">Typical Retrieval Latency</div>
         </div>
       </div>
 

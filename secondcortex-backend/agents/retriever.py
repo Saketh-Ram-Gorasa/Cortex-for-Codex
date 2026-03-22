@@ -109,6 +109,7 @@ class RetrieverAgent:
             language_id=payload.language_id,
             shadow_graph=payload.shadow_graph,
             git_branch=payload.git_branch,
+            project_id=payload.project_id,
             terminal_commands=payload.terminal_commands,
             function_context=payload.function_context,
             metadata=metadata,
