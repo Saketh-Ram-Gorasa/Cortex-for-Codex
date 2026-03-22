@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import ContextGraph from '@/components/ContextGraph';
 import Dashboard from '@/components/Dashboard';
 
@@ -16,12 +16,14 @@ type SessionMode = 'developer' | 'pm';
  */
 export default function AuthGate() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [token, setToken] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'live'>('dashboard');
   const [sessionMode, setSessionMode] = useState<SessionMode>('developer');
   const [isPmGuest, setIsPmGuest] = useState(false);
+  const [isDevGuest, setIsDevGuest] = useState(false);
 
   const [mcpKey, setMcpKey] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -32,11 +34,11 @@ export default function AuthGate() {
   const backendUrl = 'https://sc-backend-suhaan.azurewebsites.net';
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const pmQuery = params.get('pm') === 'true';
-    const guestQuery = params.get('guest') === 'true';
+    const pmQuery = searchParams.get('pm') === 'true';
+    const guestQuery = searchParams.get('guest') === 'true';
     const storedPmGuest = localStorage.getItem('sc_pm_guest_mode') === 'true';
     const storedPmAuth = localStorage.getItem('sc_pm_mode') === 'auth' || storedPmGuest;
+    const storedDevGuest = localStorage.getItem('sc_dev_guest_mode') === 'true';
 
     const storedToken = localStorage.getItem('sc_jwt_token');
     if (!storedToken) {
@@ -49,6 +51,7 @@ export default function AuthGate() {
     const nextGuest = nextMode === 'pm' && (guestQuery || storedPmGuest);
     setSessionMode(nextMode);
     setIsPmGuest(nextGuest);
+    setIsDevGuest(nextMode === 'developer' && storedDevGuest);
     setToken(storedToken);
     if (nextGuest) {
       setActiveTab('dashboard');
@@ -59,7 +62,7 @@ export default function AuthGate() {
     }
 
     setIsChecking(false);
-  }, [router]);
+  }, [router, searchParams]);
 
   const fetchMcpKey = async (authToken: string) => {
     try {
@@ -114,10 +117,12 @@ export default function AuthGate() {
     localStorage.removeItem('sc_jwt_token');
     localStorage.removeItem('sc_pm_mode');
     localStorage.removeItem('sc_pm_guest_mode');
+    localStorage.removeItem('sc_dev_guest_mode');
 
     setToken(null);
     setSessionMode('developer');
     setIsPmGuest(false);
+    setIsDevGuest(false);
     setActiveTab('dashboard');
 
     router.push('/');
@@ -137,6 +142,7 @@ export default function AuthGate() {
         <div className="nav-logo">
           Second<span>Cortex</span>
           {sessionMode === 'pm' && <span className="sc-role-badge">PM</span>}
+          {sessionMode === 'developer' && isDevGuest && <span className="sc-role-badge">Guest</span>}
         </div>
 
         <div className="sc-app-tabs">
@@ -176,7 +182,7 @@ export default function AuthGate() {
 
       <div className="sc-app-content custom-scrollbar">
         {activeTab === 'dashboard' ? (
-          <Dashboard token={token} mode={sessionMode} isGuestPm={isPmGuest} />
+          <Dashboard token={token} mode={sessionMode} isGuestPm={isPmGuest} isGuestDeveloper={isDevGuest} />
         ) : sessionMode === 'pm' && isPmGuest ? (
           <div className="sc-dashboard-wrap">
             <div className="sc-dashboard-inner">

@@ -9,29 +9,13 @@ interface DashboardProps {
     backendUrl?: string;
     mode?: 'developer' | 'pm';
     isGuestPm?: boolean;
+    isGuestDeveloper?: boolean;
 }
 
 interface Stats {
     totalSnapshots: number;
-    lastSnapshotTime: string | number | null;
+    lastSnapshotTime: string | null;
     activeProject: string;
-}
-
-const DASHBOARD_STATS_CACHE_TTL_MS = 2 * 60 * 1000;
-
-function toTimestampMs(value: string | number | null | undefined): number {
-    if (typeof value === 'number') {
-        return value > 1_000_000_000_000 ? value : value * 1000;
-    }
-    if (typeof value === 'string') {
-        const numeric = Number(value);
-        if (!Number.isNaN(numeric) && Number.isFinite(numeric)) {
-            return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
-        }
-        const parsed = Date.parse(value);
-        return Number.isNaN(parsed) ? 0 : parsed;
-    }
-    return 0;
 }
 
 function getUserIdFromToken(token: string): string | null {
@@ -55,7 +39,12 @@ export default function Dashboard({
     backendUrl = 'https://sc-backend-suhaan.azurewebsites.net',
     mode = 'developer',
     isGuestPm = false,
+    isGuestDeveloper = false,
 }: DashboardProps) {
+    if (mode === 'pm') {
+        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
+    }
+
     const userId = getUserIdFromToken(token);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
@@ -71,94 +60,30 @@ export default function Dashboard({
             if (res.ok) {
                 const data = await res.json();
                 if (data.timeline && data.timeline.length > 0) {
-                    const sortedTimeline = data.timeline.slice().sort((a: { timestamp: string | number }, b: { timestamp: string | number }) => {
-                        const aTs = toTimestampMs(a.timestamp);
-                        const bTs = toTimestampMs(b.timestamp);
-                        return bTs - aTs;
-                    });
-                    const latest = sortedTimeline[0];
-                    const nextStats: Stats = {
+                    const latest = data.timeline[data.timeline.length - 1];
+                    setStats(prev => ({
+                        ...prev,
                         totalSnapshots: data.timeline.length,
                         lastSnapshotTime: latest?.timestamp ?? null,
-                        activeProject: 'SecondCortex Labs',
-                    };
-                    setStats(nextStats);
-
-                    if (typeof window !== 'undefined' && userId) {
-                        sessionStorage.setItem(
-                            `sc:dashboard:stats:${userId}`,
-                            JSON.stringify({ savedAt: Date.now(), data: nextStats }),
-                        );
-                    }
+                    }));
                 } else {
-                    const emptyStats: Stats = {
+                    setStats(prev => ({
+                        ...prev,
                         totalSnapshots: 0,
                         lastSnapshotTime: null,
-                        activeProject: 'SecondCortex Labs',
-                    };
-                    setStats(emptyStats);
-
-                    if (typeof window !== 'undefined' && userId) {
-                        sessionStorage.setItem(
-                            `sc:dashboard:stats:${userId}`,
-                            JSON.stringify({ savedAt: Date.now(), data: emptyStats }),
-                        );
-                    }
+                    }));
                 }
             }
         } catch (err) {
             console.error("Failed to fetch stats", err);
         }
-    }, [backendUrl, token, userId]);
+    }, [backendUrl, token]);
 
     useEffect(() => {
-        if (mode === 'pm') {
-            return;
-        }
-
-        let shouldFetchImmediately = true;
-        let deferPollingByMs = 0;
-
-        if (typeof window !== 'undefined' && userId) {
-            const cached = sessionStorage.getItem(`sc:dashboard:stats:${userId}`);
-            if (cached) {
-                try {
-                    const parsed = JSON.parse(cached) as { savedAt?: number; data?: Stats };
-                    if (parsed.savedAt && parsed.data && Date.now() - parsed.savedAt < DASHBOARD_STATS_CACHE_TTL_MS) {
-                        setStats(parsed.data);
-                        shouldFetchImmediately = false;
-                        deferPollingByMs = DASHBOARD_STATS_CACHE_TTL_MS - (Date.now() - parsed.savedAt);
-                    }
-                } catch {}
-            }
-        }
-
-        let intervalId: number | undefined;
-        let timeoutId: number | undefined;
-
-        if (shouldFetchImmediately) {
-            fetchStats();
-            intervalId = window.setInterval(fetchStats, 5000);
-        } else {
-            timeoutId = window.setTimeout(() => {
-                fetchStats();
-                intervalId = window.setInterval(fetchStats, 5000);
-            }, Math.max(0, deferPollingByMs));
-        }
-
-        return () => {
-            if (timeoutId) {
-                window.clearTimeout(timeoutId);
-            }
-            if (intervalId) {
-                window.clearInterval(intervalId);
-            }
-        };
-    }, [fetchStats, mode, userId]);
-
-    if (mode === 'pm') {
-        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
-    }
+        fetchStats();
+        const intervalId = window.setInterval(fetchStats, 5000);
+        return () => window.clearInterval(intervalId);
+    }, [fetchStats]);
 
     return (
         <div className="sc-dashboard-wrap">
@@ -167,13 +92,14 @@ export default function Dashboard({
                     <p className="section-label">Control Surface</p>
                     <h1 className="section-title">Developer Dashboard</h1>
                     <p className="section-desc">View your SecondCortex memory system stats and activity summaries.</p>
+                    {isGuestDeveloper && <p className="pm-mode-chip">Guest Session: Suhaan</p>}
                 </div>
 
                 <div className="sc-stats-grid">
                     <StatCard 
                         title="Memory Snapshots" 
                         value={stats.totalSnapshots.toString()} 
-                        subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(toTimestampMs(stats.lastSnapshotTime)).toLocaleTimeString()}` : "No snapshots yet"} 
+                        subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(stats.lastSnapshotTime).toLocaleTimeString()}` : "No snapshots yet"} 
                         icon="storage"
                     />
                     <StatCard 

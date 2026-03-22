@@ -15,6 +15,34 @@ export default function AuthForm({ mode }: AuthFormProps) {
     const [displayName, setDisplayName] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const guestEmail = process.env.NEXT_PUBLIC_GUEST_LOGIN_EMAIL || 'suhaan@secondcortex.local';
+    const guestPassword = process.env.NEXT_PUBLIC_GUEST_LOGIN_PASSWORD || 'suhaan-guest';
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
+
+    const persistSession = (token: string, isGuestLogin: boolean) => {
+        localStorage.setItem('sc_jwt_token', token);
+        localStorage.setItem('sc_dev_guest_mode', isGuestLogin ? 'true' : 'false');
+        router.push('/live');
+    };
+
+    const loginWithCredentials = async (loginEmail: string, loginPassword: string, isGuestLogin = false) => {
+        const endpoint = '/api/v1/auth/login';
+
+        const res = await fetch(`${backendUrl}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: loginEmail, password: loginPassword })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            persistSession(data.token, isGuestLogin);
+            return;
+        }
+
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Login failed. Please check your credentials.');
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -28,29 +56,44 @@ export default function AuthForm({ mode }: AuthFormProps) {
         setError('');
 
         try {
-            const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
-            const endpoint = mode === 'login' ? '/api/v1/auth/login' : '/api/v1/auth/signup';
+            if (mode === 'login') {
+                await loginWithCredentials(emailTrim, password);
+                return;
+            }
 
-            const payload = mode === 'login'
-                ? { email: emailTrim, password }
-                : { email: emailTrim, password, display_name: displayName.trim() };
-
-            const res = await fetch(`${backendUrl}${endpoint}`, {
+            const res = await fetch(`${backendUrl}/api/v1/auth/signup`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({ email: emailTrim, password, display_name: displayName.trim() })
             });
 
             if (res.ok) {
                 const data = await res.json();
-                localStorage.setItem('sc_jwt_token', data.token);
-                router.push('/live');
+                persistSession(data.token, false);
             } else {
                 const errData = await res.json().catch(() => ({}));
-                setError(errData.detail || `${mode === 'login' ? 'Login' : 'Signup'} failed. Please check your credentials.`);
+                setError(errData.detail || 'Signup failed. Please check your credentials.');
             }
-        } catch {
+        } catch (err) {
+            if (mode === 'login' && err instanceof Error) {
+                setError(err.message);
+                return;
+            }
+
             setError('Cannot reach the backend. Is it running?');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleGuestLogin = async () => {
+        setIsLoading(true);
+        setError('');
+
+        try {
+            await loginWithCredentials(guestEmail, guestPassword, true);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Guest login failed.');
         } finally {
             setIsLoading(false);
         }
@@ -107,6 +150,17 @@ export default function AuthForm({ mode }: AuthFormProps) {
                     <button type="submit" disabled={isLoading} className="btn-primary sc-auth-submit">
                         {isLoading ? 'Please wait...' : mode === 'login' ? 'Log In' : 'Create Account'}
                     </button>
+
+                    {mode === 'login' && (
+                        <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={handleGuestLogin}
+                            className="btn-secondary sc-auth-submit sc-guest-btn"
+                        >
+                            {isLoading ? 'Please wait...' : 'Guest Login'}
+                        </button>
+                    )}
                 </form>
 
                 <p className="sc-auth-switch">
