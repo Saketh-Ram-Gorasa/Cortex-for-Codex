@@ -99,11 +99,15 @@ function isSakethMember(member: TeamMember): boolean {
   const id = member.id.trim().toLowerCase();
   const email = member.email.trim().toLowerCase();
   const displayName = toDisplayName(member).trim().toLowerCase();
+  const normalizedId = id.replace(/[^a-z0-9]/g, '');
+  const normalizedDisplay = displayName.replace(/[^a-z0-9]/g, '');
+  const normalizedEmail = email.replace(/[^a-z0-9@.]/g, '');
   const aliases = ['saketh', 'saket'];
-  return (
-    aliases.includes(id) ||
-    aliases.some((alias) => email.startsWith(`${alias}@`)) ||
-    aliases.includes(displayName)
+  return aliases.some(
+    (alias) =>
+      normalizedId.includes(alias) ||
+      normalizedDisplay.includes(alias) ||
+      normalizedEmail.includes(alias),
   );
 }
 
@@ -238,7 +242,35 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     [visibleMembers, selectedMemberId],
   );
 
-  const selectedSnapshots = selectedMember ? snapshotsByMember[selectedMember.id] || [] : [];
+  const resolvedSelectedMemberId = useMemo(() => {
+    if (!selectedMember) {
+      return '';
+    }
+
+    if ((snapshotsByMember[selectedMember.id] || []).length > 0) {
+      return selectedMember.id;
+    }
+
+    if (isSakethMember(selectedMember)) {
+      const directAliasMatch = members.find(
+        (member) => member.id !== selectedMember.id && isSakethMember(member),
+      );
+      if (directAliasMatch) {
+        return directAliasMatch.id;
+      }
+
+      const bestSnapshotMatch = members
+        .map((member) => ({ memberId: member.id, count: (snapshotsByMember[member.id] || []).length }))
+        .sort((a, b) => b.count - a.count)[0];
+      if (bestSnapshotMatch && bestSnapshotMatch.count > 0) {
+        return bestSnapshotMatch.memberId;
+      }
+    }
+
+    return selectedMember.id;
+  }, [selectedMember, members, snapshotsByMember]);
+
+  const selectedSnapshots = resolvedSelectedMemberId ? snapshotsByMember[resolvedSelectedMemberId] || [] : [];
   const totalSnapshots = Object.values(snapshotsByMember).reduce((sum, snapshots) => sum + snapshots.length, 0);
 
   const getCompressedSummaryText = (memberId: string, kind: SummaryKind): string => {
@@ -246,14 +278,16 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     if (!member) {
       return 'Member not found.';
     }
-    const snapshots = snapshotsByMember[memberId] || [];
+    const resolvedMemberId =
+      memberId === selectedMemberId && resolvedSelectedMemberId ? resolvedSelectedMemberId : memberId;
+    const snapshots = snapshotsByMember[resolvedMemberId] || [];
     const name = toDisplayName(member);
 
     if (kind === 'daily') {
       const now = Date.now();
       const dayCutoff = now - 24 * 60 * 60 * 1000;
       const lastDay = snapshots.filter((snapshot) => toEpochMs(snapshot.timestamp) >= dayCutoff);
-      const dailyRow = dailySummary?.members?.find((m) => m.user_id === memberId);
+      const dailyRow = dailySummary?.members?.find((m) => m.user_id === resolvedMemberId);
       const recentLines = lastDay.slice(0, 2).map((snapshot) => fmtSnapshotLine(snapshot));
       return [
         `${name} daily summary:`,
@@ -268,7 +302,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
       const now = Date.now();
       const weekCutoff = now - 7 * 24 * 60 * 60 * 1000;
       const lastWeek = snapshots.filter((snapshot) => toEpochMs(snapshot.timestamp) >= weekCutoff);
-      const weeklyRow = weeklySummary?.members?.find((m) => m.user_id === memberId);
+      const weeklyRow = weeklySummary?.members?.find((m) => m.user_id === resolvedMemberId);
       return [
         `${name} weekly summary:`,
         weeklyRow
@@ -292,7 +326,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
       return 'Select a summary button beside a team member to view compressed output.';
     }
     return getCompressedSummaryText(summarySelection.memberId, summarySelection.kind);
-  }, [summarySelection, visibleMembers, snapshotsByMember, dailySummary, weeklySummary]);
+  }, [summarySelection, visibleMembers, snapshotsByMember, dailySummary, weeklySummary, selectedMemberId, resolvedSelectedMemberId]);
 
   const sendQuestion = async (input: string) => {
     const trimmed = input.trim();
