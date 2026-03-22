@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import ContextGraph from '@/components/ContextGraph';
 import Dashboard from '@/components/Dashboard';
 
@@ -16,7 +16,6 @@ type SessionMode = 'developer' | 'pm';
  */
 export default function AuthGate() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [token, setToken] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -34,8 +33,9 @@ export default function AuthGate() {
   const backendUrl = 'https://sc-backend-suhaan.azurewebsites.net';
 
   useEffect(() => {
-    const pmQuery = searchParams.get('pm') === 'true';
-    const guestQuery = searchParams.get('guest') === 'true';
+    const params = new URLSearchParams(window.location.search);
+    const pmQuery = params.get('pm') === 'true';
+    const guestQuery = params.get('guest') === 'true';
     const storedPmGuest = localStorage.getItem('sc_pm_guest_mode') === 'true';
     const storedPmAuth = localStorage.getItem('sc_pm_mode') === 'auth' || storedPmGuest;
     const storedDevGuest = localStorage.getItem('sc_dev_guest_mode') === 'true';
@@ -62,7 +62,7 @@ export default function AuthGate() {
     }
 
     setIsChecking(false);
-  }, [router, searchParams]);
+  }, [router]);
 
   const fetchMcpKey = async (authToken: string) => {
     try {
