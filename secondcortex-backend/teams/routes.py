@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -14,11 +15,13 @@ from pydantic import BaseModel
 from auth.database import UserDB
 from auth.jwt_handler import get_current_principal, get_current_user
 from projects.routes import project_db
+from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.teams.routes")
 
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
 user_db = UserDB()
+vector_db = VectorDBService()
 
 
 class CreateTeamRequest(BaseModel):
@@ -67,6 +70,31 @@ class MemberSnapshot(BaseModel):
     enriched_context: dict
     timestamp: int
     synced: int
+
+
+def _parse_timestamp_to_epoch_seconds(value: object) -> int:
+    if isinstance(value, (int, float)):
+        numeric = int(value)
+        return numeric // 1000 if numeric > 1_000_000_000_000 else numeric
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return 0
+        try:
+            numeric = int(float(raw))
+            return numeric // 1000 if numeric > 1_000_000_000_000 else numeric
+        except Exception:
+            pass
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp())
+        except Exception:
+            return 0
+
+    return 0
 
 
 def _authorize_team_read(team_id: str, principal: dict, user_db: UserDB) -> None:
@@ -222,8 +250,49 @@ async def get_member_snapshots(
             ):
                 raise HTTPException(status_code=403, detail="Not authorized to access this project")
 
-    rows = user_db.get_user_snapshots(member_id, limit=limit)
+    # Source of truth: vector timeline (fresh snapshots from Retriever ingestion).
+    timeline = await vector_db.get_snapshot_timeline(limit=limit, user_id=member_id)
     snapshots: list[MemberSnapshot] = []
+
+    if timeline:
+        for row in timeline:
+            row_project_id = row.get("project_id")
+            if projectId and str(row_project_id or "") != projectId:
+                continue
+
+            commands_raw = row.get("terminal_commands") or "[]"
+            commands: list[str] = []
+            if isinstance(commands_raw, list):
+                commands = [str(cmd) for cmd in commands_raw]
+            elif isinstance(commands_raw, str):
+                try:
+                    parsed = json.loads(commands_raw)
+                    if isinstance(parsed, list):
+                        commands = [str(cmd) for cmd in parsed]
+                except Exception:
+                    commands = []
+
+            snapshots.append(
+                MemberSnapshot(
+                    id=str(row.get("id") or ""),
+                    user_id=member_id,
+                    team_id=member_team,
+                    project_id=str(row_project_id) if row_project_id else None,
+                    workspace=str(row.get("workspace_folder") or ""),
+                    active_file=str(row.get("active_file") or ""),
+                    git_branch=str(row.get("git_branch") or "") or None,
+                    terminal_commands=commands,
+                    summary=str(row.get("summary") or ""),
+                    enriched_context={},
+                    timestamp=_parse_timestamp_to_epoch_seconds(row.get("timestamp")),
+                    synced=1,
+                )
+            )
+
+        return snapshots
+
+    # Fallback: legacy synced snapshots table.
+    rows = user_db.get_user_snapshots(member_id, limit=limit)
 
     for row in rows:
         commands_raw = row.get("terminal_commands") or "[]"

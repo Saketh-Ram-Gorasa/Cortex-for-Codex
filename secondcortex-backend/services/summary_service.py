@@ -40,18 +40,16 @@ class SummaryService:
         
         for member in members:
             user_id = member["id"]
-            
-            # Get snapshot count for today
-            snapshot_count = self._get_snapshot_count_for_day(user_id, team_id, days_ago=0)
+
+            daily_activity = self._get_user_vector_activity_window(user_id, days=1)
+            snapshot_count = len(daily_activity)
             
             # Get commits for today
             commit_count = self._get_commit_count(user_id, days=1)
             
-            # Get languages used today
-            languages = self._get_languages_used(user_id, days=1)
-            
-            # Get files modified today
-            files_modified = self._get_files_modified(user_id, days=1)
+            # Get languages/files from freshest vector activity.
+            languages = self._infer_languages_from_files([entry["active_file"] for entry in daily_activity])
+            files_modified = len({entry["active_file"] for entry in daily_activity if entry["active_file"]})
             
             is_active = snapshot_count > 0 or commit_count > 0
             if is_active:
@@ -98,18 +96,15 @@ class SummaryService:
         
         for member in members:
             user_id = member["id"]
-            
-            # Get snapshot count for this week
-            snapshot_count = self._get_snapshot_count(user_id, team_id, days=7)
+
+            weekly_activity = self._get_user_vector_activity_window(user_id, days=7)
+            snapshot_count = len(weekly_activity)
             
             # Get commits for this week
             commit_count = self._get_commit_count(user_id, days=7)
             
-            # Get languages used this week
-            languages = self._get_languages_used(user_id, days=7)
-            
-            # Get files modified this week
-            files_modified = self._get_files_modified(user_id, days=7)
+            languages = self._infer_languages_from_files([entry["active_file"] for entry in weekly_activity])
+            files_modified = len({entry["active_file"] for entry in weekly_activity if entry["active_file"]})
             
             is_active = snapshot_count > 0 or commit_count > 0
             if is_active:
@@ -134,7 +129,7 @@ class SummaryService:
         # Build daily breakdown for the week
         for i in range(7):
             day = (datetime.utcnow() - timedelta(days=i)).strftime("%A")
-            count = self._get_team_snapshot_count_for_day(team_id, i)
+            count = self._get_team_vector_snapshot_count_for_day(team_id, i)
             daily_breakdown[day] = count
         
         return {
@@ -316,6 +311,23 @@ class SummaryService:
         except Exception as exc:
             logger.error("Failed to compute vector activity for user=%s: %s", user_id, exc)
             return []
+
+    def _get_user_vector_activity_window(self, user_id: str, days: int) -> list[dict]:
+        activity = self._get_user_vector_activity(user_id)
+        cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+        return [entry for entry in activity if entry["timestamp"] >= cutoff]
+
+    def _get_team_vector_snapshot_count_for_day(self, team_id: str, days_ago: int) -> int:
+        members = self.user_db.get_team_members(team_id)
+        target_date = (datetime.utcnow() - timedelta(days=days_ago)).date()
+        total = 0
+        for member in members:
+            user_id = member.get("id")
+            if not user_id:
+                continue
+            activity = self._get_user_vector_activity(user_id)
+            total += sum(1 for entry in activity if entry["timestamp"].date() == target_date)
+        return total
 
     def _infer_languages_from_files(self, file_paths: list[str]) -> list[str]:
         extension_map = {
