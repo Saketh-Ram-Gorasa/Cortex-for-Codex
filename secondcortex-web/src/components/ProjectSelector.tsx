@@ -14,6 +14,8 @@ interface ProjectSelectorProps {
   backendUrl: string;
   selectedProjectId: string | null;
   onChange: (projectId: string | null) => void;
+  refreshKey?: number;
+  onSelectedNameChange?: (name: string | null) => void;
 }
 
 export default function ProjectSelector({
@@ -21,6 +23,8 @@ export default function ProjectSelector({
   backendUrl,
   selectedProjectId,
   onChange,
+  refreshKey = 0,
+  onSelectedNameChange,
 }: ProjectSelectorProps) {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
 
@@ -37,23 +41,44 @@ export default function ProjectSelector({
         const visibleProjects = (data.projects || []).filter((project) => !project.is_archived);
         setProjects(visibleProjects);
 
-        if (visibleProjects.length > 0 && !selectedProjectId) {
-          onChange(visibleProjects[0].id);
+        if (visibleProjects.length === 0) {
+          onSelectedNameChange?.(null);
+          if (selectedProjectId) {
+            onChange(null);
+          }
+          return;
         }
+
+        const selectedProject = visibleProjects.find((project) => project.id === selectedProjectId) || null;
+        if (selectedProject) {
+          onSelectedNameChange?.(selectedProject.name);
+          return;
+        }
+
+        onChange(visibleProjects[0].id);
+        onSelectedNameChange?.(visibleProjects[0].name);
       } catch {
         setProjects([]);
+        onSelectedNameChange?.(null);
       }
     };
 
     if (token) {
       loadProjects();
     }
-  }, [backendUrl, token, selectedProjectId, onChange]);
+  }, [backendUrl, token, selectedProjectId, onChange, refreshKey, onSelectedNameChange]);
+
+  const handleSelectChange = (nextProjectId: string) => {
+    const normalizedId = nextProjectId || null;
+    onChange(normalizedId);
+    const selectedProject = projects.find((project) => project.id === normalizedId) || null;
+    onSelectedNameChange?.(selectedProject?.name || null);
+  };
 
   return (
     <select
       value={selectedProjectId || ''}
-      onChange={(event) => onChange(event.target.value || null)}
+      onChange={(event) => handleSelectChange(event.target.value)}
       style={{
         border: '1px solid var(--border)',
         background: 'var(--surface)',

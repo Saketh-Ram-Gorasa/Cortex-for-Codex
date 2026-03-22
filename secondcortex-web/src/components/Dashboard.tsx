@@ -57,10 +57,12 @@ export default function Dashboard({
 
     const userId = getUserIdFromToken(token);
     const [showProjectManager, setShowProjectManager] = useState(false);
+    const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+    const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
-        activeProject: 'SecondCortex Labs'
+        activeProject: 'No Project Selected'
     });
 
     const fetchStats = useCallback(async () => {
@@ -113,6 +115,8 @@ export default function Dashboard({
                             backendUrl={backendUrl}
                             selectedProjectId={selectedProjectId}
                             onChange={onSelectedProjectChange}
+                            refreshKey={projectRefreshKey}
+                            onSelectedNameChange={setSelectedProjectName}
                         />
                         <button
                             type="button"
@@ -129,7 +133,10 @@ export default function Dashboard({
                         token={token}
                         backendUrl={backendUrl}
                         onClose={() => setShowProjectManager(false)}
-                        onProjectsChanged={fetchStats}
+                        onProjectsChanged={() => {
+                            fetchStats();
+                            setProjectRefreshKey((value) => value + 1);
+                        }}
                     />
                 )}
 
@@ -142,7 +149,7 @@ export default function Dashboard({
                     />
                     <StatCard 
                         title="Active Project" 
-                        value={stats.activeProject} 
+                        value={selectedProjectName || 'No Project Selected'} 
                         subtitle="Current workspace scope" 
                         icon="workspace"
                     />
