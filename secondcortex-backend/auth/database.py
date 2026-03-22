@@ -273,6 +273,40 @@ class UserDB:
             return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
         return None
 
+    def get_user_by_email(self, email: str) -> dict | None:
+        """Lookup a user by email."""
+        normalized_email = email.lower().strip()
+        if not normalized_email:
+            return None
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT id, email, display_name, team_id FROM users WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+        if row:
+            return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
+        return None
+
+    def get_most_active_user(self) -> dict | None:
+        """Return the user with the largest snapshot history (fallback for guest login)."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT u.id, u.email, u.display_name, u.team_id
+                FROM users u
+                INNER JOIN (
+                    SELECT user_id, COUNT(*) AS snapshot_count, MAX(timestamp) AS last_snapshot
+                    FROM synced_snapshots
+                    GROUP BY user_id
+                    ORDER BY snapshot_count DESC, last_snapshot DESC
+                    LIMIT 1
+                ) s ON s.user_id = u.id
+                """
+            ).fetchone()
+        if row:
+            return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
+        return None
+
     def get_team_member_ids(self, user_id: str) -> list[str]:
         """Return all user IDs visible to this user by team scope rules."""
         user = self.get_user_by_id(user_id)
