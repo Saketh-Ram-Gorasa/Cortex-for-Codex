@@ -5,8 +5,6 @@ Team summary API routes: daily/weekly summaries, pluggable for multiple dashboar
 from __future__ import annotations
 
 import logging
-import time
-from threading import Lock
 
 from fastapi import APIRouter, HTTPException, Depends
 
@@ -19,26 +17,6 @@ logger = logging.getLogger("secondcortex.teams.summary_routes")
 router = APIRouter(prefix="/api/v1/summaries", tags=["summaries"])
 user_db = UserDB()
 summary_service = SummaryService()
-_SUMMARY_CACHE_TTL_SECONDS = 60
-_summary_cache: dict[str, tuple[float, dict]] = {}
-_summary_cache_lock = Lock()
-
-
-def _summary_cache_get(key: str) -> dict | None:
-    with _summary_cache_lock:
-        hit = _summary_cache.get(key)
-        if not hit:
-            return None
-        expires_at, payload = hit
-        if expires_at <= time.time():
-            _summary_cache.pop(key, None)
-            return None
-        return payload
-
-
-def _summary_cache_set(key: str, payload: dict) -> None:
-    with _summary_cache_lock:
-        _summary_cache[key] = (time.time() + _SUMMARY_CACHE_TTL_SECONDS, payload)
 
 
 def _authorize_team_summary_read(team_id: str, principal: dict) -> None:
@@ -69,12 +47,7 @@ async def get_team_daily_summary(team_id: str, principal: dict = Depends(get_cur
     Pluggable format for team dashboard, PM dashboard, etc.
     """
     _authorize_team_summary_read(team_id, principal)
-    cache_key = f"team::{team_id}::daily"
-    cached = _summary_cache_get(cache_key)
-    if cached:
-        return cached
     summary = summary_service.generate_daily_summary(team_id)
-    _summary_cache_set(cache_key, summary)
     return summary
 
 
@@ -86,12 +59,7 @@ async def get_team_weekly_summary(team_id: str, principal: dict = Depends(get_cu
     Pluggable format for team dashboard, PM dashboard, etc.
     """
     _authorize_team_summary_read(team_id, principal)
-    cache_key = f"team::{team_id}::weekly"
-    cached = _summary_cache_get(cache_key)
-    if cached:
-        return cached
     summary = summary_service.generate_weekly_summary(team_id)
-    _summary_cache_set(cache_key, summary)
     return summary
 
 

@@ -51,15 +51,6 @@ interface TeamSummaryResponse {
   generated_at: string;
 }
 
-interface PMBootstrapResponse {
-  team_id: string;
-  members: TeamMember[];
-  snapshots_by_member: Record<string, MemberSnapshot[]>;
-  daily_summary: TeamSummaryResponse;
-  weekly_summary: TeamSummaryResponse;
-  generated_at: string;
-}
-
 interface ChatMessage {
   role: 'assistant' | 'user';
   text: string;
@@ -193,27 +184,10 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
           setSummarySelection((prev) => prev || { memberId: initial, kind: 'daily' });
         }
 
-        const bootstrapRes = await fetch(
-          `${apiBase}/api/v1/teams/${resolvedTeamId}/pm/bootstrap?snapshotLimit=100`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-
-        if (bootstrapRes.ok) {
-          const bootstrap = (await bootstrapRes.json()) as PMBootstrapResponse;
-          if (!cancelled) {
-            setSnapshotsByMember(bootstrap.snapshots_by_member || {});
-            setDailySummary(bootstrap.daily_summary || null);
-            setWeeklySummary(bootstrap.weekly_summary || null);
-          }
-          return;
-        }
-
         const snapshotEntries = await Promise.all(
           orderedMembers.map(async (member) => {
             const res = await fetch(
-              `${apiBase}/api/v1/teams/${resolvedTeamId}/members/${member.id}/snapshots?limit=100`,
+              `${apiBase}/api/v1/teams/${resolvedTeamId}/members/${member.id}/snapshots?limit=1000`,
               {
                 headers: { Authorization: `Bearer ${token}` },
               },

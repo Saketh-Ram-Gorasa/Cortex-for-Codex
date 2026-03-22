@@ -4,12 +4,9 @@ Team API routes: create, join, get members, generate invite codes.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import time
 import uuid
-from threading import Lock
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -18,7 +15,6 @@ from pydantic import BaseModel
 from auth.database import UserDB
 from auth.jwt_handler import get_current_principal, get_current_user
 from projects.routes import project_db
-from services.summary_service import SummaryService
 from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.teams.routes")
@@ -26,10 +22,6 @@ logger = logging.getLogger("secondcortex.teams.routes")
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
 user_db = UserDB()
 vector_db = VectorDBService()
-summary_service = SummaryService()
-_PM_BOOTSTRAP_CACHE_TTL_SECONDS = 45
-_pm_bootstrap_cache: dict[str, tuple[float, dict]] = {}
-_pm_bootstrap_cache_lock = Lock()
 
 
 class CreateTeamRequest(BaseModel):
@@ -78,34 +70,6 @@ class MemberSnapshot(BaseModel):
     enriched_context: dict
     timestamp: int
     synced: int
-
-
-class PMBootstrapResponse(BaseModel):
-    team_id: str
-    members: list[TeamMemberInfo]
-    snapshots_by_member: dict[str, list[MemberSnapshot]]
-    daily_summary: dict
-    weekly_summary: dict
-    generated_at: str
-
-
-def _cache_get_pm_bootstrap(cache_key: str) -> dict | None:
-    with _pm_bootstrap_cache_lock:
-        hit = _pm_bootstrap_cache.get(cache_key)
-        if not hit:
-            return None
-
-        expires_at, payload = hit
-        if expires_at <= time.time():
-            _pm_bootstrap_cache.pop(cache_key, None)
-            return None
-
-        return payload
-
-
-def _cache_set_pm_bootstrap(cache_key: str, payload: dict) -> None:
-    with _pm_bootstrap_cache_lock:
-        _pm_bootstrap_cache[cache_key] = (time.time() + _PM_BOOTSTRAP_CACHE_TTL_SECONDS, payload)
 
 
 def _parse_timestamp_to_epoch_seconds(value: object) -> int:
@@ -376,92 +340,3 @@ async def get_member_snapshots(
         return [snapshot for snapshot in snapshots if snapshot.project_id == projectId]
 
     return snapshots
-
-
-@router.get("/{team_id}/pm/bootstrap", response_model=PMBootstrapResponse)
-async def get_pm_bootstrap(
-    team_id: str,
-    snapshotLimit: int = 100,
-    projectId: str | None = None,
-    principal: dict = Depends(get_current_principal),
-):
-    """
-    Aggregated PM bootstrap payload to reduce frontend fan-out.
-    Includes members, compact member snapshot previews, and daily/weekly summaries.
-    """
-    _authorize_team_read(team_id, principal, user_db)
-    role = str(principal.get("role") or "user")
-
-    if projectId:
-        if role == "pm_guest":
-            guest_team_id = str(principal.get("team_id") or "")
-            project = project_db.get_project_by_id(projectId)
-            if not project or project.get("visibility") != "team" or project.get("team_id") != guest_team_id:
-                raise HTTPException(status_code=403, detail="Not authorized to access this project")
-        else:
-            requester_user_id = str(principal.get("sub") or "")
-            requester = user_db.get_user_by_id(requester_user_id) if requester_user_id else None
-            requester_team_id = requester.get("team_id") if requester else None
-            if not project_db.user_can_access_project(
-                user_id=requester_user_id,
-                team_id=requester_team_id,
-                project_id=projectId,
-            ):
-                raise HTTPException(status_code=403, detail="Not authorized to access this project")
-
-    capped_limit = max(10, min(snapshotLimit, 200))
-    cache_key = f"{team_id}::{projectId or 'all'}::{capped_limit}"
-    cached = _cache_get_pm_bootstrap(cache_key)
-    if cached:
-        return cached
-
-    members = user_db.get_team_members(team_id)
-    member_ids = [str(member.get("id") or "") for member in members if member.get("id")]
-
-    async def _member_snapshots(member_id: str) -> tuple[str, list[MemberSnapshot]]:
-        timeline = await vector_db.get_snapshot_timeline(limit=capped_limit, user_id=member_id, project_id=projectId)
-        previews: list[MemberSnapshot] = []
-        for row in timeline:
-            commands_raw = row.get("terminal_commands") or "[]"
-            commands: list[str] = []
-            if isinstance(commands_raw, list):
-                commands = [str(cmd) for cmd in commands_raw]
-            elif isinstance(commands_raw, str):
-                try:
-                    parsed = json.loads(commands_raw)
-                    if isinstance(parsed, list):
-                        commands = [str(cmd) for cmd in parsed]
-                except Exception:
-                    commands = []
-
-            previews.append(
-                MemberSnapshot(
-                    id=str(row.get("id") or ""),
-                    user_id=member_id,
-                    team_id=team_id,
-                    project_id=str(row.get("project_id") or "") or None,
-                    workspace=str(row.get("workspace_folder") or ""),
-                    active_file=str(row.get("active_file") or ""),
-                    git_branch=str(row.get("git_branch") or "") or None,
-                    terminal_commands=commands,
-                    summary=str(row.get("summary") or ""),
-                    enriched_context={},
-                    timestamp=_parse_timestamp_to_epoch_seconds(row.get("timestamp")),
-                    synced=1,
-                )
-            )
-        return member_id, previews
-
-    snapshot_entries = await asyncio.gather(*[_member_snapshots(member_id) for member_id in member_ids])
-    snapshots_by_member = {member_id: snapshots for member_id, snapshots in snapshot_entries}
-
-    payload = PMBootstrapResponse(
-        team_id=team_id,
-        members=[TeamMemberInfo(**member) for member in members],
-        snapshots_by_member=snapshots_by_member,
-        daily_summary=summary_service.generate_daily_summary(team_id),
-        weekly_summary=summary_service.generate_weekly_summary(team_id),
-        generated_at=datetime.now(timezone.utc).isoformat(),
-    ).model_dump()
-    _cache_set_pm_bootstrap(cache_key, payload)
-    return payload

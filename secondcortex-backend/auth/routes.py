@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
-from threading import Lock
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
@@ -22,9 +20,6 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 # Shared DB instance
 user_db = UserDB()
-_ME_CACHE_TTL_SECONDS = 60
-_me_cache: dict[str, tuple[float, MeResponse]] = {}
-_me_cache_lock = Lock()
 
 
 class SignupRequest(BaseModel):
@@ -221,20 +216,12 @@ async def get_me(principal: dict = Depends(get_current_principal)):
         )
 
     user_id = str(principal.get("sub") or "")
-    with _me_cache_lock:
-        cached = _me_cache.get(user_id)
-        if cached and cached[0] > time.time():
-            return cached[1]
-
     user = user_db.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    response = MeResponse(
+    return MeResponse(
         user_id=user["id"],
         email=user["email"],
         display_name=user["display_name"],
         team_id=user.get("team_id"),
     )
-    with _me_cache_lock:
-        _me_cache[user_id] = (time.time() + _ME_CACHE_TTL_SECONDS, response)
-    return response

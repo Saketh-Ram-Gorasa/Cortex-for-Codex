@@ -68,7 +68,7 @@ export default function Dashboard({
     const fetchStats = useCallback(async () => {
         try {
             const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
-            const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=100${projectQuery}`, {
+            const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000${projectQuery}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
@@ -97,25 +97,8 @@ export default function Dashboard({
 
     useEffect(() => {
         fetchStats();
-
-        const intervalId = window.setInterval(() => {
-            if (document.hidden) {
-                return;
-            }
-            void fetchStats();
-        }, 15000);
-
-        const onVisibilityChange = () => {
-            if (!document.hidden) {
-                void fetchStats();
-            }
-        };
-        document.addEventListener('visibilitychange', onVisibilityChange);
-
-        return () => {
-            window.clearInterval(intervalId);
-            document.removeEventListener('visibilitychange', onVisibilityChange);
-        };
+        const intervalId = window.setInterval(fetchStats, 5000);
+        return () => window.clearInterval(intervalId);
     }, [fetchStats]);
 
     return (

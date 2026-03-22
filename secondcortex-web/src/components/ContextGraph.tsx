@@ -285,7 +285,7 @@ export default function ContextGraph({
         const pollTimeline = async () => {
             try {
                 const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
-                const response = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=100${projectQuery}`, {
+                const response = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=500${projectQuery}`, {
                     headers: { Authorization: `Bearer ${token}` },
                 });
 
@@ -325,24 +325,11 @@ export default function ContextGraph({
         };
 
         pollTimeline();
-        const intervalId = window.setInterval(() => {
-            if (document.hidden) {
-                return;
-            }
-            void pollTimeline();
-        }, 15000);
-
-        const onVisibilityChange = () => {
-            if (!document.hidden) {
-                void pollTimeline();
-            }
-        };
-        document.addEventListener('visibilitychange', onVisibilityChange);
+        const intervalId = window.setInterval(pollTimeline, 4000);
 
         return () => {
             cancelled = true;
             window.clearInterval(intervalId);
-            document.removeEventListener('visibilitychange', onVisibilityChange);
         };
     }, [backendUrl, token, onUnauthorized, isPinnedInPast, selectedProjectId]);
 

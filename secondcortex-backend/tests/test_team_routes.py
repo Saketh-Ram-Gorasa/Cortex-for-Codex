@@ -86,26 +86,3 @@ def test_join_team_with_code(client, auth_headers):
     
     assert response.status_code == 200
     assert response.json()["team_id"] is not None
-
-
-def test_get_pm_bootstrap(client, auth_headers):
-    """PM bootstrap endpoint returns aggregated payload."""
-    create_resp = client.post(
-        "/api/v1/teams",
-        headers=auth_headers,
-        json={"name": "PM Bootstrap Team"},
-    )
-    team_id = create_resp.json()["team_id"]
-
-    response = client.get(
-        f"/api/v1/teams/{team_id}/pm/bootstrap?snapshotLimit=50",
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["team_id"] == team_id
-    assert "members" in data
-    assert "snapshots_by_member" in data
-    assert "daily_summary" in data
-    assert "weekly_summary" in data
