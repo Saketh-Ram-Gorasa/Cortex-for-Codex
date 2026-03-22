@@ -99,7 +99,12 @@ function isSakethMember(member: TeamMember): boolean {
   const id = member.id.trim().toLowerCase();
   const email = member.email.trim().toLowerCase();
   const displayName = toDisplayName(member).trim().toLowerCase();
-  return id === 'saketh' || email.startsWith('saketh@') || displayName === 'saketh';
+  const aliases = ['saketh', 'saket'];
+  return (
+    aliases.includes(id) ||
+    aliases.some((alias) => email.startsWith(`${alias}@`)) ||
+    aliases.includes(displayName)
+  );
 }
 
 export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGuestDashboardProps) {
