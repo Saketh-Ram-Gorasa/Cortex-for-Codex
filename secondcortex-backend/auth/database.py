@@ -679,3 +679,57 @@ class UserDB:
                 return str(row[0])
 
         return None
+
+    def get_user_teams(self, user_id: str) -> list[dict]:
+        """Return all teams a user belongs to (supports historical memberships)."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT t.id, t.name, t.team_lead_id, t.created_at, COUNT(tm2.user_id) as member_count
+                FROM teams t
+                INNER JOIN team_members tm ON tm.team_id = t.id
+                LEFT JOIN team_members tm2 ON tm2.team_id = t.id
+                WHERE tm.user_id = ?
+                GROUP BY t.id, t.name, t.team_lead_id, t.created_at
+                ORDER BY t.created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+
+            if rows:
+                return [
+                    {
+                        "id": r[0],
+                        "name": r[1],
+                        "team_lead_id": r[2],
+                        "created_at": r[3],
+                        "member_count": int(r[4] or 0),
+                    }
+                    for r in rows
+                ]
+
+            user_row = conn.execute(
+                "SELECT team_id FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if not user_row or not user_row[0]:
+                return []
+
+            fallback_team = self.get_team_info(str(user_row[0]))
+            return [fallback_team] if fallback_team else []
+
+    def is_user_in_team(self, user_id: str, team_id: str) -> bool:
+        """Check membership by team_members first, then users.team_id fallback."""
+        with sqlite3.connect(self.db_path) as conn:
+            membership = conn.execute(
+                "SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? LIMIT 1",
+                (team_id, user_id),
+            ).fetchone()
+            if membership:
+                return True
+
+            fallback = conn.execute(
+                "SELECT 1 FROM users WHERE id = ? AND team_id = ? LIMIT 1",
+                (user_id, team_id),
+            ).fetchone()
+            return bool(fallback)

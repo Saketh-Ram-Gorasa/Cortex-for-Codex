@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import AuthGate from '@/components/AuthGate';
 
 export const metadata = {
@@ -8,7 +9,9 @@ export const metadata = {
 export default function LivePage() {
     return (
         <main className="min-h-screen w-full">
-            <AuthGate />
+            <Suspense fallback={null}>
+                <AuthGate />
+            </Suspense>
         </main>
     );
 }

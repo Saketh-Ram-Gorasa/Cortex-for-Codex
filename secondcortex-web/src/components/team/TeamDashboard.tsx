@@ -7,67 +7,104 @@ import TeamChatPanel from './TeamChatPanel';
 
 interface TeamDashboardProps {
   teamId: string;
+  token: string;
+  backendUrl: string;
 }
 
-export default function TeamDashboard({ teamId }: TeamDashboardProps) {
+interface TeamInfo {
+  id: string;
+  name: string;
+  team_lead_id: string;
+  member_count: number;
+}
+
+export default function TeamDashboard({ teamId, token, backendUrl }: TeamDashboardProps) {
   const [teamInfo, setTeamInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Get token from localStorage
-    const storedToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    setToken(storedToken);
-  }, []);
-
-  useEffect(() => {
-    if (!token) return;
+    if (!token || !teamId) {
+      return;
+    }
 
     const fetchTeamInfo = async () => {
+      setLoading(true);
+      setError(null);
       try {
-        const response = await fetch(`/api/v1/teams/${teamId}`, {
+        const response = await fetch(`${backendUrl}/api/v1/teams/${teamId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch team info (${response.status})`);
+        }
+
+        const data = (await response.json()) as TeamInfo;
         setTeamInfo(data);
       } catch (error) {
-        console.error('Failed to fetch team info:', error);
+        setError(error instanceof Error ? error.message : 'Failed to fetch team info');
       } finally {
         setLoading(false);
       }
     };
 
     fetchTeamInfo();
-  }, [teamId, token]);
+  }, [teamId, token, backendUrl]);
 
   if (loading) {
-    return <div className="p-4">Loading team dashboard...</div>;
+    return <div className="p-4 text-sm text-slate-300">Loading team dashboard...</div>;
+  }
+
+  if (error) {
+    return <div className="p-4 text-sm text-red-300">{error}</div>;
   }
 
   return (
-    <div className="flex h-screen bg-slate-900 text-white">
-      {/* Left Panel: Team Members */}
+    <div className="flex h-full min-h-[520px] bg-slate-900 text-white rounded border border-slate-700 overflow-hidden">
       <aside
         data-section="members"
-        className="w-40 border-r border-slate-700 overflow-y-auto"
+        className="w-56 border-r border-slate-700 overflow-y-auto"
       >
-        <TeamMembersPanel teamId={teamId} teamInfo={teamInfo} token={token} />
+        <TeamMembersPanel
+          teamId={teamId}
+          teamInfo={teamInfo}
+          token={token}
+          backendUrl={backendUrl}
+          selectedMemberId={selectedMemberId}
+          onSelectMember={setSelectedMemberId}
+        />
       </aside>
 
-      {/* Center: Team Graph Snapshot */}
       <main
         data-section="graph"
         className="flex-1 border-r border-slate-700 p-4 overflow-y-auto"
       >
-        <TeamGraphSnapshot teamId={teamId} token={token} />
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold">{teamInfo?.name || 'Team Space'}</h2>
+          <p className="text-xs text-slate-300">
+            Team snapshots, contexts, summaries, and chat collaboration.
+          </p>
+        </div>
+        <TeamGraphSnapshot
+          teamId={teamId}
+          token={token}
+          backendUrl={backendUrl}
+          selectedMemberId={selectedMemberId}
+        />
       </main>
 
-      {/* Right Panel: Chat + Summaries */}
       <aside
         data-section="chat"
-        className="w-80 border-l border-slate-700 flex flex-col overflow-hidden"
+        className="w-96 border-l border-slate-700 flex flex-col overflow-hidden"
       >
-        <TeamChatPanel teamId={teamId} token={token} />
+        <TeamChatPanel
+          teamId={teamId}
+          token={token}
+          backendUrl={backendUrl}
+          selectedMemberId={selectedMemberId}
+        />
       </aside>
     </div>
   );
