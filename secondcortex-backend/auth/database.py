@@ -9,8 +9,10 @@ import hashlib
 import hmac
 import logging
 import os
+import secrets
 import sqlite3
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from config import settings
@@ -43,6 +45,10 @@ def _verify_password(password: str, stored_hash: str, salt: str) -> bool:
     """Verify a password against stored hash."""
     computed_hash, _ = _hash_password(password, salt)
     return hmac.compare_digest(computed_hash, stored_hash)
+
+
+def _hash_api_secret(secret: str, salt: str) -> str:
+    return hashlib.sha256(f"{salt}:{secret}".encode("utf-8")).hexdigest()
 
 
 class UserDB:
@@ -163,6 +169,25 @@ class UserDB:
                     FOREIGN KEY (team_id) REFERENCES teams (id),
                     FOREIGN KEY (user_id) REFERENCES users (id)
                 )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS mcp_api_keys (
+                    key_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    key_hash TEXT NOT NULL,
+                    key_salt TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT 'default',
+                    scopes TEXT NOT NULL DEFAULT 'memory:read',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP,
+                    last_used_at TIMESTAMP,
+                    is_revoked INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_user_active
+                ON mcp_api_keys (user_id, is_revoked, expires_at)
             """)
             conn.commit()
 
@@ -453,20 +478,167 @@ class UserDB:
         return max(int(s.get("timestamp") or 0) for s in snapshots)
 
     def generate_mcp_api_key(self, user_id: str) -> str:
-        """Generate a new MCP API key for the user and save it."""
-        import secrets
-        new_key = f"sc_mcp_{secrets.token_urlsafe(32)}"
+        """Generate a new MCP API key for the user and save it.
+
+        Compatibility helper used by existing routes.
+        """
+        issued = self.issue_mcp_api_key(user_id=user_id)
+        return issued["api_key"]
+
+    def issue_mcp_api_key(
+        self,
+        user_id: str,
+        *,
+        name: str = "default",
+        scopes: list[str] | None = None,
+        ttl_days: int | None = None,
+    ) -> dict:
+        """Issue a scoped, expiring MCP API key and return the plaintext value once."""
+        scopes = scopes or ["memory:read"]
+        key_id = uuid.uuid4().hex[:12]
+        key_secret = secrets.token_urlsafe(32)
+        api_key = f"sc_mcp_{key_id}_{key_secret}"
+        key_salt = secrets.token_hex(16)
+        key_hash = _hash_api_secret(key_secret, key_salt)
+        ttl = max(1, ttl_days or int(settings.mcp_key_ttl_days))
+        expires_at = datetime.now(timezone.utc) + timedelta(days=ttl)
+
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
+                """
+                INSERT INTO mcp_api_keys (key_id, user_id, key_hash, key_salt, name, scopes, expires_at, is_revoked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    key_id,
+                    user_id,
+                    key_hash,
+                    key_salt,
+                    name.strip() or "default",
+                    ",".join(sorted({s.strip() for s in scopes if s and s.strip()})) or "memory:read",
+                    expires_at.isoformat(),
+                ),
+            )
+            conn.execute(
                 "UPDATE users SET mcp_api_key = ? WHERE id = ?",
-                (new_key, user_id),
+                (api_key, user_id),
             )
             conn.commit()
-        logger.info("Generated new MCP API key for user: %s", user_id)
-        return new_key
+        logger.info("Issued MCP API key for user=%s key_id=%s", user_id, key_id)
+        return {
+            "api_key": api_key,
+            "key_id": key_id,
+            "name": name.strip() or "default",
+            "scopes": scopes,
+            "expires_at": expires_at.isoformat(),
+        }
+
+    def list_mcp_api_keys(self, user_id: str) -> list[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT key_id, name, scopes, created_at, expires_at, last_used_at, is_revoked
+                FROM mcp_api_keys
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+
+        return [
+            {
+                "key_id": row[0],
+                "name": row[1],
+                "scopes": [s for s in str(row[2] or "").split(",") if s],
+                "created_at": row[3],
+                "expires_at": row[4],
+                "last_used_at": row[5],
+                "is_revoked": bool(row[6]),
+            }
+            for row in rows
+        ]
+
+    def revoke_mcp_api_key(self, user_id: str, key_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE mcp_api_keys SET is_revoked = 1 WHERE user_id = ? AND key_id = ?",
+                (user_id, key_id),
+            )
+            conn.execute(
+                """
+                UPDATE users
+                SET mcp_api_key = NULL
+                WHERE id = ? AND mcp_api_key LIKE ?
+                """,
+                (user_id, f"sc_mcp_{key_id}_%"),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0) > 0
+
+    def _lookup_new_style_mcp_key(self, api_key: str) -> dict | None:
+        if not api_key or not api_key.startswith("sc_mcp_"):
+            return None
+
+        parts = api_key.split("_", 3)
+        if len(parts) != 4:
+            return None
+
+        key_id = parts[2].strip()
+        key_secret = parts[3].strip()
+        if not key_id or not key_secret:
+            return None
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT k.user_id, u.email, u.display_name, k.scopes, k.expires_at, k.key_hash, k.key_salt, k.is_revoked
+                FROM mcp_api_keys k
+                JOIN users u ON u.id = k.user_id
+                WHERE k.key_id = ?
+                """,
+                (key_id,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            user_id, email, display_name, scopes_raw, expires_at_raw, key_hash, key_salt, is_revoked = row
+            if int(is_revoked or 0) == 1:
+                return None
+
+            expected_hash = _hash_api_secret(key_secret, str(key_salt))
+            if not hmac.compare_digest(str(key_hash), expected_hash):
+                return None
+
+            if expires_at_raw:
+                try:
+                    expires_at = datetime.fromisoformat(str(expires_at_raw).replace("Z", "+00:00"))
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    if expires_at < datetime.now(timezone.utc):
+                        return None
+                except ValueError:
+                    return None
+
+            conn.execute(
+                "UPDATE mcp_api_keys SET last_used_at = ? WHERE key_id = ?",
+                (datetime.now(timezone.utc).isoformat(), key_id),
+            )
+            conn.commit()
+
+        return {
+            "id": user_id,
+            "email": email,
+            "display_name": display_name,
+            "scopes": [s for s in str(scopes_raw or "").split(",") if s],
+        }
 
     def get_user_by_mcp_api_key(self, api_key: str) -> dict | None:
         """Lookup a user by their MCP API key."""
+        new_style_user = self._lookup_new_style_mcp_key(api_key)
+        if new_style_user is not None:
+            return new_style_user
+
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT id, email, display_name FROM users WHERE mcp_api_key = ?",

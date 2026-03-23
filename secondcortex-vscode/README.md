@@ -27,6 +27,15 @@ What MCP adds:
 - Keep memory access scoped and authenticated with MCP API keys.
 
 MCP is served by the backend and exposes tools like `search_memory` for context retrieval across files, branches, and snapshots.
+It also supports hierarchical context tools (`get_codebase_overview`, `get_domain_context`, `get_function_context`, `get_raw_snapshots`) plus `get_related_context` for relationship-based graph traversal so agents can drill down progressively.
+For task-driven prompts, `get_context_for_task_type` returns cached/freshness-aware summaries for `debugging`, `code-review`, `feature-addition`, and `incident-response`.
+Batch 5 introduces Slack-first external ingestion via `ingest_slack_thread` (feature-flagged), and retrieval responses now include lineage/confidence metadata when external evidence participates.
+Batch 6 adds operational MCP tools: `get_mcp_metrics` (latency/counter observability) and `get_mcp_readiness` (runtime dependency readiness checks).
+
+Recommended MCP auth setup for local MCP clients (Claude Desktop/Cursor/Copilot bridge):
+- Generate a key from `POST /api/v1/auth/mcp-key` (or scoped keys via `/api/v1/auth/mcp-keys`).
+- Set `SECONDCORTEX_MCP_API_KEY` in the MCP host process environment.
+- Call MCP tools without repeatedly pasting keys in chat prompts.
 
 ## 🛠️ Getting Started
 

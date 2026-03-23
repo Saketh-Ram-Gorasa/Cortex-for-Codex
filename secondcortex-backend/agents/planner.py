@@ -10,6 +10,7 @@ When the user asks a question (e.g., "Why did we roll back?"), this agent:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -77,9 +78,19 @@ class PlannerAgent:
         all_results: list[dict] = []
 
         for i, query in enumerate(search_queries):
-            logger.info("Search step %d/%d: %s", i + 1, MAX_STEPS, query)
-            results = await self.vector_db.semantic_search(query, top_k=5, user_id=user_id)
-            all_results.extend(results)
+            logger.info("Search step %d/%d queued: %s", i + 1, MAX_STEPS, query)
+
+        search_jobs = [
+            self.vector_db.semantic_search(query, top_k=5, user_id=user_id)
+            for query in search_queries
+        ]
+        search_results = await asyncio.gather(*search_jobs, return_exceptions=True)
+
+        for query, result in zip(search_queries, search_results):
+            if isinstance(result, Exception):
+                logger.warning("Semantic search failed for query '%s': %s", query, result)
+                continue
+            all_results.extend(result)
 
         # Deduplicate by snapshot ID
         seen_ids: set[str] = set()

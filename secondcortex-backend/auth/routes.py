@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel, EmailStr
 
 from auth.database import UserDB
@@ -44,6 +45,34 @@ class AuthResponse(BaseModel):
 
 class MCPKeyResponse(BaseModel):
     api_key: str | None
+
+
+class MCPKeyIssueRequest(BaseModel):
+    name: str = "default"
+    scopes: list[str] = ["memory:read"]
+    ttl_days: int | None = None
+
+
+class MCPKeyMetadata(BaseModel):
+    key_id: str
+    name: str
+    scopes: list[str]
+    created_at: str | None = None
+    expires_at: str | None = None
+    last_used_at: str | None = None
+    is_revoked: bool
+
+
+class MCPKeyIssueResponse(BaseModel):
+    api_key: str
+    key_id: str
+    name: str
+    scopes: list[str]
+    expires_at: str
+
+
+class MCPKeyListResponse(BaseModel):
+    keys: list[MCPKeyMetadata]
 
 
 class MeResponse(BaseModel):
@@ -111,10 +140,57 @@ async def login(req: LoginRequest):
 
 
 @router.post("/mcp-key", response_model=MCPKeyResponse)
-async def generate_mcp_key(user_id: str = Depends(get_current_user)):
-    """Generate a new MCP API key for the current user."""
-    new_key = user_db.generate_mcp_api_key(user_id)
-    return MCPKeyResponse(api_key=new_key)
+async def generate_mcp_key(
+    req: MCPKeyIssueRequest | None = Body(default=None),
+    user_id: str = Depends(get_current_user),
+):
+    """Generate a new MCP API key for the current user (legacy-compatible response)."""
+    payload = req or MCPKeyIssueRequest()
+    issued = user_db.issue_mcp_api_key(
+        user_id=user_id,
+        name=payload.name,
+        scopes=payload.scopes,
+        ttl_days=payload.ttl_days,
+    )
+    return MCPKeyResponse(api_key=issued["api_key"])
+
+
+@router.post("/mcp-keys", response_model=MCPKeyIssueResponse)
+async def issue_mcp_key(
+    req: MCPKeyIssueRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Issue a named scoped MCP API key with expiration metadata."""
+    issued = user_db.issue_mcp_api_key(
+        user_id=user_id,
+        name=req.name,
+        scopes=req.scopes,
+        ttl_days=req.ttl_days,
+    )
+    return MCPKeyIssueResponse(**issued)
+
+
+@router.get("/mcp-keys", response_model=MCPKeyListResponse)
+async def list_mcp_keys(user_id: str = Depends(get_current_user)):
+    """List all MCP API keys issued for the current user."""
+    keys = user_db.list_mcp_api_keys(user_id)
+    return MCPKeyListResponse(keys=[MCPKeyMetadata(**key) for key in keys])
+
+
+@router.delete("/mcp-keys/{key_id}")
+async def revoke_mcp_key(
+    key_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    """Revoke one MCP API key by key_id for the current user."""
+    revoked = user_db.revoke_mcp_api_key(user_id=user_id, key_id=key_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="MCP key not found")
+    return {
+        "status": "revoked",
+        "key_id": key_id,
+        "revoked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
 
 
 @router.get("/mcp-key", response_model=MCPKeyResponse)

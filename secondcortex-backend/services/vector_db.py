@@ -19,6 +19,7 @@ import chromadb
 
 from config import settings
 from services.llm_client import task_embedding_create
+from services.external_ingest import ExternalMemoryRecord
 
 logger = logging.getLogger("secondcortex.vectordb")
 
@@ -37,6 +38,7 @@ class VectorDBService:
             self.chroma_client = None
         self._query_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._cache_ttl_seconds = 30
+        self._cache_max_entries = 512
 
     def _cache_key(
         self,
@@ -62,10 +64,24 @@ class VectorDBService:
         return [dict(item) for item in payload]
 
     def _cache_set(self, key: str, payload: list[dict[str, Any]]) -> None:
+        if key in self._query_cache:
+            self._query_cache.pop(key, None)
         self._query_cache[key] = (
             time.time() + self._cache_ttl_seconds,
             [dict(item) for item in payload],
         )
+        self._prune_query_cache()
+
+    def _prune_query_cache(self) -> None:
+        now = time.time()
+
+        expired_keys = [key for key, (expires_at, _payload) in self._query_cache.items() if expires_at <= now]
+        for key in expired_keys:
+            self._query_cache.pop(key, None)
+
+        while len(self._query_cache) > self._cache_max_entries:
+            oldest_key = next(iter(self._query_cache))
+            self._query_cache.pop(oldest_key, None)
 
     def _clear_user_cache(self, user_id: str | None) -> None:
         token = f"::{user_id or 'default'}::"
@@ -254,6 +270,62 @@ class VectorDBService:
             fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
             self._cache_set(cache_key, fallback)
             return fallback
+
+    async def upsert_external_record(self, record: ExternalMemoryRecord, user_id: str | None = None) -> str | None:
+        """Store an external memory record (Slack/Notion/Confluence style) with provenance metadata."""
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — skipping external upsert.")
+            return None
+
+        record_id = record.source_id.replace("/", "_")
+        if not record_id:
+            record_id = f"external-{int(time.time() * 1000)}"
+
+        content = "\n".join([
+            f"{record.title}",
+            f"Domain: {record.domain}",
+            record.summary,
+            record.content,
+        ])
+        embedding = await self.generate_embedding(content[:8000])
+        if not embedding:
+            dimension = self._infer_collection_dimension(collection)
+            embedding = self._build_fallback_embedding(content, dimension)
+
+        metadata = {
+            "id": record_id,
+            "timestamp": record.timestamp.isoformat(),
+            "workspace_folder": "external",
+            "active_file": record.title,
+            "language_id": "external",
+            "shadow_graph": record.content[:5000],
+            "git_branch": "external",
+            "project_id": str(record.project_id or ""),
+            "terminal_commands": "[]",
+            "summary": record.summary,
+            "entities": ",".join(record.entities),
+            "active_symbol": "",
+            "function_signatures": "[]",
+            "source_type": record.source_type,
+            "source_id": record.source_id,
+            "source_uri": record.source_uri,
+            "confidence_score": float(record.confidence_score),
+            "domain": record.domain,
+        }
+
+        try:
+            collection.upsert(
+                ids=[record_id],
+                embeddings=[embedding],
+                metadatas=[metadata],
+                documents=[record.content],
+            )
+            self._clear_user_cache(user_id)
+            return record_id
+        except Exception as exc:
+            logger.error("External upsert failed: %s", exc)
+            return None
 
     async def get_recent_snapshots(
             self,

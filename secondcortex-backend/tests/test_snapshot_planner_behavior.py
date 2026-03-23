@@ -23,6 +23,14 @@ class _FakeVectorDB:
         return [{"id": "sem1", "summary": "semantic result"}]
 
 
+class _PartiallyFailingVectorDB(_FakeVectorDB):
+    async def semantic_search(self, query: str, top_k: int = 5, user_id: str | None = None):
+        self.semantic_calls.append(query)
+        if "fail" in query:
+            raise RuntimeError("simulated semantic failure")
+        return [{"id": "sem-ok", "summary": f"result for {query}"}]
+
+
 def test_extract_requested_snapshot_count_parses_numbers():
     assert _extract_requested_snapshot_count("fetch me 3 latest snapshots") == 3
     assert _extract_requested_snapshot_count("latest 7 snapshots") == 7
@@ -40,3 +48,23 @@ def test_planner_uses_timeline_for_latest_snapshot_requests():
     assert db.semantic_calls == []
     assert len(result.retrieved_context) == 3
     assert result.search_queries == ["latest_3_snapshots"]
+
+
+def test_planner_keeps_successful_results_when_one_semantic_query_fails():
+    db = _PartiallyFailingVectorDB()
+    agent = PlannerAgent(db)
+
+    async def fake_generate_plan(_question: str):
+        return {
+            "intent": "mixed query",
+            "search_queries": ["good query", "fail query"],
+            "temporal_scope": "all_time",
+        }
+
+    agent._generate_plan = fake_generate_plan  # type: ignore[method-assign]
+
+    result = asyncio.run(agent.plan("mixed", user_id="u1"))
+
+    assert db.semantic_calls == ["good query", "fail query"]
+    assert len(result.retrieved_context) == 1
+    assert result.retrieved_context[0]["id"] == "sem-ok"
