@@ -191,6 +191,10 @@ class QueryResponse(BaseModel):
     summary: str
     reasoningLog: list[str] = Field(default_factory=list, alias="reasoningLog")
     commands: list[ResurrectionCommand] = Field(default_factory=list)
+    retrieved_facts: list[dict] = Field(default_factory=list, alias="retrievedFacts")
+    retrieved_snapshots: list[dict] = Field(default_factory=list, alias="retrievedSnapshots")
+
+    model_config = {"populate_by_name": True}
 
 
 # ── Resurrection ────────────────────────────────────────────────
