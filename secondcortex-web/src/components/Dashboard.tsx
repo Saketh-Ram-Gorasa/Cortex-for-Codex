@@ -233,6 +233,19 @@ export default function Dashboard({
 
     const selectedTeam = teams.find((team) => team.id === selectedTeamId) || null;
 
+    if (showTeamDashboard && selectedTeam) {
+        return (
+            <TeamDashboard
+                teamId={selectedTeam.id}
+                token={token}
+                backendUrl={backendUrl}
+                teams={teams}
+                onTeamChange={setSelectedTeamId}
+                onClose={() => setShowTeamDashboard(false)}
+            />
+        );
+    }
+
     return (
         <div className="sc-dashboard-wrap">
             <div className="sc-dashboard-inner">
@@ -287,55 +300,6 @@ export default function Dashboard({
                             setProjectRefreshKey((value) => value + 1);
                         }}
                     />
-                )}
-
-                {showTeamDashboard && (
-                    <div className="sc-modal-wrap">
-                        <div className="sc-modal-backdrop" onClick={() => setShowTeamDashboard(false)} />
-                        <div className="sc-modal-card" style={{ maxWidth: '1200px', width: '95vw' }}>
-                            <div className="sc-modal-stack" style={{ gap: 12 }}>
-                                <div className="sc-modal-head">
-                                    <div className="sc-modal-emoji">Team</div>
-                                    <h3 className="sc-modal-title">My Teams</h3>
-                                    <p className="sc-modal-sub">Choose a team to open team snapshots, summaries, and chatbot.</p>
-                                </div>
-
-                                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                    {teams.map((team) => (
-                                        <button
-                                            key={team.id}
-                                            type="button"
-                                            className="btn-secondary"
-                                            onClick={() => setSelectedTeamId(team.id)}
-                                            style={{
-                                                borderColor: selectedTeamId === team.id ? 'var(--accent)' : undefined,
-                                                color: selectedTeamId === team.id ? 'var(--text)' : undefined,
-                                            }}
-                                        >
-                                            {team.name}
-                                        </button>
-                                    ))}
-                                </div>
-
-                                {teamLoading && <p className="sc-auth-sub">Loading team data...</p>}
-                                {!teamLoading && teams.length === 0 && (
-                                    <p className="sc-auth-sub">You are not in any team yet. Use the Teams button to create or join one.</p>
-                                )}
-
-                                {selectedTeam && (
-                                    <TeamDashboard
-                                        teamId={selectedTeam.id}
-                                        token={token}
-                                        backendUrl={backendUrl}
-                                    />
-                                )}
-
-                                <button onClick={() => setShowTeamDashboard(false)} className="btn-primary sc-modal-close">
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    </div>
                 )}
 
                 {showTeamModal && (
