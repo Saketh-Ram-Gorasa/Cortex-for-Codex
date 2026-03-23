@@ -154,6 +154,23 @@ class MemoryMetadata(BaseModel):
     summary: str = ""
 
 
+# ── Long-Term Memory: Facts ────────────────────────────────────
+
+class Fact(BaseModel):
+    """Long-term memory: an explicit fact extracted or retained."""
+    id: str                          # UUID
+    content: str                     # The fact text (e.g., "Peter specializes in optimization")
+    kind: str                        # "world" | "experience" | "opinion" | "entity"
+    salience: float = 0.5            # 0.0-1.0: importance/relevance
+    confidence: float = 0.7          # 0.0-1.0: certainty
+    entities: list[str] = Field(default_factory=list)  # Related entity names
+    source_snapshot_id: str | None = None  # Snapshot this was extracted from
+    created_at: datetime             # When fact was created
+    last_accessed_at: datetime       # When fact was last retrieved (for decay)
+
+    model_config = {"populate_by_name": True}
+
+
 # ── Query (from Sidebar chat) ───────────────────────────────────
 
 class QueryRequest(BaseModel):

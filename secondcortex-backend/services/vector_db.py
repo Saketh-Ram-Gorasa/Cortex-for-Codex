@@ -449,3 +449,112 @@ class VectorDBService:
         except Exception as exc:
             logger.error("get_snapshot_by_id failed for %s: %s", snapshot_id, exc)
             return None
+
+    # ── Long-Term Memory: Facts ────────────────────────────────
+
+    def _get_facts_collection(self, user_id: str | None = None):
+        """Get or create facts collection (separate from snapshots)."""
+        if self.chroma_client is None:
+            return None
+
+        collection_name = f"facts-{user_id}" if user_id else "secondcortex-facts"
+        collection_name = collection_name[:63]  # ChromaDB name limit
+
+        try:
+            return self.chroma_client.get_or_create_collection(name=collection_name)
+        except Exception as exc:
+            logger.error("Failed to get/create facts collection '%s': %s", collection_name, exc)
+            return None
+
+    async def upsert_fact(self, fact: Any, user_id: str | None = None) -> None:
+        """Store a fact in the facts collection."""
+        collection = self._get_facts_collection(user_id)
+        if collection is None:
+            logger.warning("Facts collection not available for user=%s", user_id or "default")
+            return
+
+        try:
+            # Generate embedding for the fact
+            embedding = await self.generate_embedding(fact.content)
+            if not embedding:
+                embedding = self._build_fallback_embedding(fact.content, 1536)
+
+            metadata = {
+                "id": str(fact.id),
+                "kind": fact.kind,
+                "salience": fact.salience,
+                "confidence": fact.confidence,
+                "entities": ",".join(fact.entities),
+                "source_snapshot_id": str(fact.source_snapshot_id or ""),
+                "created_at": fact.created_at.isoformat(),
+                "last_accessed_at": fact.last_accessed_at.isoformat(),
+            }
+
+            collection.upsert(
+                ids=[str(fact.id)],
+                embeddings=[embedding],
+                metadatas=[metadata],
+                documents=[fact.content]
+            )
+            logger.info("Upserted fact %s to facts collection for user=%s", fact.id, user_id or "default")
+        except Exception as exc:
+            logger.error("Failed to upsert fact: %s", exc)
+
+    async def recall_facts(
+        self,
+        query: str,
+        top_k: int = 5,
+        user_id: str | None = None,
+        min_salience: float = 0.0,
+    ) -> list[dict]:
+        """Retrieve facts by semantic similarity."""
+        collection = self._get_facts_collection(user_id)
+        if collection is None:
+            logger.warning("Facts collection not available for user=%s", user_id or "default")
+            return []
+
+        try:
+            query_embedding = await self.generate_embedding(query)
+            if not query_embedding:
+                logger.warning("No query embedding generated for fact recall")
+                return []
+
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+            )
+
+            if results and results.get("metadatas") and results["metadatas"]:
+                metadatas = results["metadatas"][0]
+                facts = []
+                for meta in metadatas:
+                    if meta and float(meta.get("salience", 0)) >= min_salience:
+                        meta_dict = dict(meta)
+                        facts.append(meta_dict)
+                return facts
+
+            return []
+        except Exception as exc:
+            logger.error("Fact recall failed: %s", exc)
+            return []
+
+    async def get_fact_by_id(self, fact_id: str, user_id: str | None = None) -> dict | None:
+        """Fetch a single fact by ID."""
+        collection = self._get_facts_collection(user_id)
+        if collection is None:
+            return None
+
+        try:
+            results = collection.get(ids=[fact_id], include=["metadatas", "documents"])
+            metadatas = (results or {}).get("metadatas") or []
+            documents = (results or {}).get("documents") or []
+
+            if not metadatas:
+                return None
+
+            metadata = dict(metadatas[0]) if metadatas[0] else {}
+            metadata["document"] = documents[0] if documents else ""
+            return metadata
+        except Exception as exc:
+            logger.error("get_fact_by_id failed for %s: %s", fact_id, exc)
+            return None
