@@ -23,6 +23,7 @@ export default function AuthGate() {
   const [sessionMode, setSessionMode] = useState<SessionMode>('developer');
   const [isPmGuest, setIsPmGuest] = useState(false);
   const [isDevGuest, setIsDevGuest] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const [mcpKey, setMcpKey] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -30,7 +31,11 @@ export default function AuthGate() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const backendUrl = 'https://sc-backend-suhaan.azurewebsites.net';
+  const backendUrl =
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    (typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+      ? 'http://127.0.0.1:8000'
+      : 'https://sc-backend-suhaan.azurewebsites.net');
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -182,7 +187,14 @@ export default function AuthGate() {
 
       <div className="sc-app-content custom-scrollbar">
         {activeTab === 'dashboard' ? (
-          <Dashboard token={token} mode={sessionMode} isGuestPm={isPmGuest} isGuestDeveloper={isDevGuest} />
+          <Dashboard
+            token={token}
+            mode={sessionMode}
+            isGuestPm={isPmGuest}
+            isGuestDeveloper={isDevGuest}
+            selectedProjectId={selectedProjectId}
+            onSelectedProjectChange={setSelectedProjectId}
+          />
         ) : sessionMode === 'pm' && isPmGuest ? (
           <div className="sc-dashboard-wrap">
             <div className="sc-dashboard-inner">
@@ -198,7 +210,11 @@ export default function AuthGate() {
             </div>
           </div>
         ) : (
-          <ContextGraph token={token} onUnauthorized={handleLogout} />
+          <ContextGraph
+            token={token}
+            onUnauthorized={handleLogout}
+            selectedProjectId={selectedProjectId}
+          />
         )}
       </div>
 

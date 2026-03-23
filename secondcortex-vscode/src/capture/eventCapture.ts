@@ -16,6 +16,7 @@ export interface CapturedSnapshot {
     /** Sanitized code context (secrets replaced with [CODE_REDACTED]) */
     shadowGraph: string;
     gitBranch: string | null;
+    projectId?: string;
     terminalCommands: string[];
     functionContext?: {
         activeSymbol: string | null;
@@ -31,13 +32,17 @@ export interface CapturedSnapshot {
 export class EventCapture {
     private disposables: vscode.Disposable[] = [];
     private recentTerminalCommands: string[] = [];
+    private deferredSnapshots: CapturedSnapshot[] = [];
+    private lastProjectPromptAt = 0;
 
     constructor(
         private debouncer: Debouncer,
         private firewall: SemanticFirewall,
         private cache: SnapshotCache,
         private backend: BackendClient,
-        private output: vscode.OutputChannel
+        private output: vscode.OutputChannel,
+        private getSelectedProjectId?: () => string | undefined,
+        private onProjectSelectionRequired?: () => void
     ) { }
 
     register(context: vscode.ExtensionContext): void {
@@ -180,16 +185,51 @@ export class EventCapture {
             functionContext,
         };
 
+        const selectedProjectId = this.getSelectedProjectId?.();
+        if (!selectedProjectId) {
+            this.deferredSnapshots.push(snapshot);
+            this.output.appendLine('[EventCapture] Snapshot deferred: no active project selection.');
+            const now = Date.now();
+            if (now - this.lastProjectPromptAt > 20000) {
+                this.lastProjectPromptAt = now;
+                this.onProjectSelectionRequired?.();
+            }
+            this.recentTerminalCommands = [];
+            return;
+        }
+
+        snapshot.projectId = selectedProjectId;
+
         this.output.appendLine(`[EventCapture] Snapshot ready for: ${doc.uri.fsPath}`);
 
+        await this.flushDeferredSnapshots(selectedProjectId);
+        await this.sendOrCache(snapshot);
+
+        // Clear terminal buffer after shipping
+        this.recentTerminalCommands = [];
+    }
+
+    async flushDeferredSnapshots(projectId?: string): Promise<void> {
+        const activeProjectId = projectId || this.getSelectedProjectId?.();
+        if (!activeProjectId || this.deferredSnapshots.length === 0) {
+            return;
+        }
+
+        const pending = [...this.deferredSnapshots];
+        this.deferredSnapshots = [];
+
+        for (const snapshot of pending) {
+            snapshot.projectId = activeProjectId;
+            await this.sendOrCache(snapshot);
+        }
+    }
+
+    private async sendOrCache(snapshot: CapturedSnapshot): Promise<void> {
         const uploadOk = await this.backend.sendSnapshot(snapshot as unknown as Record<string, unknown>);
         if (!uploadOk) {
             this.output.appendLine('[EventCapture] Backend unreachable - caching snapshot locally.');
             this.cache.store(snapshot);
         }
-
-        // Clear terminal buffer after shipping
-        this.recentTerminalCommands = [];
     }
 
     private async getCurrentGitBranch(): Promise<string | null> {

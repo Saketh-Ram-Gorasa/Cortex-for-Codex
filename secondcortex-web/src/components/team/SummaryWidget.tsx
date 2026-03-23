@@ -28,6 +28,7 @@ interface SummaryWidgetProps {
   context: 'team' | 'pm' | 'individual'; // Determines styling and data shown
   token: string;
   backendUrl?: string;
+  selectedProjectId?: string | null;
 }
 
 const SUMMARY_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -44,6 +45,7 @@ export default function SummaryWidget({
   period,
   token,
   backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
+  selectedProjectId,
 }: SummaryWidgetProps) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +66,8 @@ export default function SummaryWidget({
           return;
         }
 
-        const cacheKey = `sc:summary:${teamId ? `team:${teamId}` : `user:${userId}`}:${period}`;
+        const projectKey = selectedProjectId || 'all-projects';
+        const cacheKey = `sc:summary:${teamId ? `team:${teamId}` : `user:${userId}`}:${period}:project:${projectKey}`;
         const cached = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
 
         if (cached) {
@@ -102,7 +105,7 @@ export default function SummaryWidget({
     if (token) {
       fetchSummary();
     }
-  }, [teamId, userId, period, token, backendUrl]);
+  }, [teamId, userId, period, token, backendUrl, selectedProjectId]);
 
   if (loading) {
     return <div className="text-xs text-slate-400">Loading summary...</div>;

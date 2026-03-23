@@ -1,6 +1,42 @@
 import * as vscode from 'vscode';
 import { AuthService } from './auth/authService';
 
+export interface ProjectSummary {
+    id: string;
+    owner_user_id: string;
+    name: string;
+    slug: string | null;
+    visibility: 'private' | 'team';
+    team_id: string | null;
+    workspace_name: string | null;
+    workspace_path_hash: string | null;
+    repo_remote: string | null;
+    is_archived: boolean;
+    created_at: number;
+    updated_at: number;
+}
+
+export interface ProjectResolveRequest {
+    workspaceName: string;
+    workspacePathHash: string;
+    repoRemote?: string;
+    teamId?: string;
+}
+
+export interface ProjectResolveCandidate {
+    projectId: string;
+    name: string;
+    confidence: number;
+}
+
+export interface ProjectResolveResponse {
+    status: 'resolved' | 'ambiguous' | 'unresolved';
+    projectId: string | null;
+    confidence: number;
+    candidates: ProjectResolveCandidate[];
+    needsSelection: boolean;
+}
+
 /**
  * BackendClient – HTTP client for communicating with the SecondCortex FastAPI backend.
  * Sends an Authorization: Bearer <JWT> header for per-user authentication.
@@ -72,6 +108,50 @@ export class BackendClient {
         } catch (err) {
             this.output.appendLine(`[BackendClient] Network error sending snapshot: ${err}`);
             return false;
+        }
+    }
+
+    async listProjects(): Promise<ProjectSummary[]> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/projects`, {
+                method: 'GET',
+                headers: await this.getHeaders(),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return [];
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] List projects failed: ${res.status} ${res.statusText}`);
+                return [];
+            }
+            const data = await res.json() as { projects?: ProjectSummary[] };
+            return data.projects || [];
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error listing projects: ${err}`);
+            return [];
+        }
+    }
+
+    async resolveProject(request: ProjectResolveRequest): Promise<ProjectResolveResponse | null> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/projects/resolve`, {
+                method: 'POST',
+                headers: await this.getHeaders(),
+                body: JSON.stringify(request),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Resolve project failed: ${res.status} ${res.statusText}`);
+                return null;
+            }
+            return (await res.json()) as ProjectResolveResponse;
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error resolving project: ${err}`);
+            return null;
         }
     }
 
@@ -242,16 +322,18 @@ export class BackendClient {
     }
 
     /** Fetch linear snapshot timeline for Shadow Graph time-travel UI. */
-    async getSnapshotTimeline(limit: number = 200): Promise<Array<{
+    async getSnapshotTimeline(limit: number = 200, projectId?: string): Promise<Array<{
         id: string;
         timestamp: string;
         active_file: string;
         git_branch: string | null;
+        project_id?: string | null;
         summary: string;
         entities: string[];
     }>> {
         try {
-            const res = await fetch(`${this.baseUrl}/api/v1/snapshots/timeline?limit=${encodeURIComponent(limit)}`, {
+            const projectQuery = projectId ? `&projectId=${encodeURIComponent(projectId)}` : '';
+            const res = await fetch(`${this.baseUrl}/api/v1/snapshots/timeline?limit=${encodeURIComponent(limit)}${projectQuery}`, {
                 headers: await this.getHeaders(),
             });
             if (res.status === 401) {
@@ -269,6 +351,7 @@ export class BackendClient {
                 timestamp: string;
                 active_file: string;
                 git_branch: string | null;
+                project_id?: string | null;
                 summary: string;
                 entities: string[];
             }>;
@@ -332,6 +415,7 @@ export class BackendClient {
         commitMessage: string;
         author: string;
         timestamp: string;
+        projectId?: string;
     }): Promise<{
         found: boolean;
         summary: string | null;

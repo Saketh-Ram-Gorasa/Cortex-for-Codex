@@ -7,17 +7,21 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from auth.database import UserDB
 from auth.jwt_handler import get_current_principal, get_current_user
+from projects.routes import project_db
+from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.teams.routes")
 
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
 user_db = UserDB()
+vector_db = VectorDBService()
 
 
 class CreateTeamRequest(BaseModel):
@@ -57,6 +61,7 @@ class MemberSnapshot(BaseModel):
     id: str
     user_id: str
     team_id: str | None = None
+    project_id: str | None = None
     workspace: str
     active_file: str
     git_branch: str | None = None
@@ -65,6 +70,31 @@ class MemberSnapshot(BaseModel):
     enriched_context: dict
     timestamp: int
     synced: int
+
+
+def _parse_timestamp_to_epoch_seconds(value: object) -> int:
+    if isinstance(value, (int, float)):
+        numeric = int(value)
+        return numeric // 1000 if numeric > 1_000_000_000_000 else numeric
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return 0
+        try:
+            numeric = int(float(raw))
+            return numeric // 1000 if numeric > 1_000_000_000_000 else numeric
+        except Exception:
+            pass
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp())
+        except Exception:
+            return 0
+
+    return 0
 
 
 def _authorize_team_read(team_id: str, principal: dict, user_db: UserDB) -> None:
@@ -82,9 +112,15 @@ def _authorize_team_read(team_id: str, principal: dict, user_db: UserDB) -> None
         return
 
     user_id = str(principal.get("sub") or "")
-    user = user_db.get_user_by_id(user_id)
-    if not user or user.get("team_id") != team_id:
+    if not user_db.is_user_in_team(user_id, team_id):
         raise HTTPException(status_code=403, detail="You are not a member of this team")
+
+
+@router.get("/mine", response_model=list[TeamInfo])
+async def get_my_teams(user_id: str = Depends(get_current_user)):
+    """Get all teams the current user belongs to."""
+    teams = user_db.get_user_teams(user_id)
+    return [TeamInfo(**team) for team in teams]
 
 
 @router.post("", response_model=CreateTeamResponse)
@@ -185,6 +221,7 @@ async def get_member_snapshots(
     team_id: str,
     member_id: str,
     limit: int = 1000,
+    projectId: str | None = None,
     principal: dict = Depends(get_current_principal),
 ):
     """
@@ -201,8 +238,67 @@ async def get_member_snapshots(
     if member_team != team_id:
         raise HTTPException(status_code=403, detail="Target member is not part of this team")
 
-    rows = user_db.get_user_snapshots(member_id, limit=limit)
+    if projectId:
+        role = str(principal.get("role") or "user")
+        if role == "pm_guest":
+            guest_team_id = str(principal.get("team_id") or "")
+            project = project_db.get_project_by_id(projectId)
+            if not project or project.get("visibility") != "team" or project.get("team_id") != guest_team_id:
+                raise HTTPException(status_code=403, detail="Not authorized to access this project")
+        else:
+            requester_user_id = str(principal.get("sub") or "")
+            requester = user_db.get_user_by_id(requester_user_id) if requester_user_id else None
+            requester_team_id = requester.get("team_id") if requester else None
+            if not project_db.user_can_access_project(
+                user_id=requester_user_id,
+                team_id=requester_team_id,
+                project_id=projectId,
+            ):
+                raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+    # Source of truth: vector timeline (fresh snapshots from Retriever ingestion).
+    timeline = await vector_db.get_snapshot_timeline(limit=limit, user_id=member_id)
     snapshots: list[MemberSnapshot] = []
+
+    if timeline:
+        for row in timeline:
+            row_project_id = row.get("project_id")
+            if projectId and str(row_project_id or "") != projectId:
+                continue
+
+            commands_raw = row.get("terminal_commands") or "[]"
+            commands: list[str] = []
+            if isinstance(commands_raw, list):
+                commands = [str(cmd) for cmd in commands_raw]
+            elif isinstance(commands_raw, str):
+                try:
+                    parsed = json.loads(commands_raw)
+                    if isinstance(parsed, list):
+                        commands = [str(cmd) for cmd in parsed]
+                except Exception:
+                    commands = []
+
+            snapshots.append(
+                MemberSnapshot(
+                    id=str(row.get("id") or ""),
+                    user_id=member_id,
+                    team_id=member_team,
+                    project_id=str(row_project_id) if row_project_id else None,
+                    workspace=str(row.get("workspace_folder") or ""),
+                    active_file=str(row.get("active_file") or ""),
+                    git_branch=str(row.get("git_branch") or "") or None,
+                    terminal_commands=commands,
+                    summary=str(row.get("summary") or ""),
+                    enriched_context={},
+                    timestamp=_parse_timestamp_to_epoch_seconds(row.get("timestamp")),
+                    synced=1,
+                )
+            )
+
+        return snapshots
+
+    # Fallback: legacy synced snapshots table.
+    rows = user_db.get_user_snapshots(member_id, limit=limit)
 
     for row in rows:
         commands_raw = row.get("terminal_commands") or "[]"
@@ -234,6 +330,7 @@ async def get_member_snapshots(
                 id=str(row.get("id")),
                 user_id=str(row.get("user_id")),
                 team_id=row.get("team_id"),
+                project_id=row.get("project_id"),
                 workspace=str(row.get("workspace") or ""),
                 active_file=str(row.get("active_file") or ""),
                 git_branch=row.get("git_branch"),
@@ -244,5 +341,8 @@ async def get_member_snapshots(
                 synced=int(row.get("synced") or 0),
             )
         )
+
+    if projectId:
+        return [snapshot for snapshot in snapshots if snapshot.project_id == projectId]
 
     return snapshots

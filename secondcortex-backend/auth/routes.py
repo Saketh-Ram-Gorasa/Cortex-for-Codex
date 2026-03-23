@@ -5,6 +5,7 @@ Auth API routes: signup, login, me.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
@@ -57,6 +58,15 @@ class PMGuestLoginResponse(BaseModel):
     role: str
     team_id: str
     display_name: str
+
+
+class GuestLoginResponse(BaseModel):
+    token: str
+    role: str
+    user_id: str
+    email: str
+    display_name: str
+    team_id: str | None = None
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -120,22 +130,75 @@ async def pm_guest_login():
     if not settings.pm_guest_enabled:
         raise HTTPException(status_code=403, detail="PM guest login is disabled.")
 
-    team_id = (settings.pm_guest_team_id or "").strip()
-    if not team_id:
-        raise HTTPException(status_code=503, detail="PM_GUEST_TEAM_ID is not configured.")
+    configured_team_id = (settings.pm_guest_team_id or "").strip()
+    candidate_team_ids: list[str] = []
+    if configured_team_id:
+        candidate_team_ids.append(configured_team_id)
 
-    team_info = user_db.get_team_info(team_id)
-    if not team_info:
-        raise HTTPException(status_code=503, detail="Configured PM guest team does not exist.")
+    inferred_team_id = user_db.get_most_active_team_id()
+    if inferred_team_id and inferred_team_id not in candidate_team_ids:
+        candidate_team_ids.append(inferred_team_id)
+
+    if not candidate_team_ids:
+        raise HTTPException(status_code=503, detail="PM guest login is unavailable: no team is configured.")
+
+    resolved_team_id: str | None = None
+    for candidate in candidate_team_ids:
+        team_info = user_db.get_team_info(candidate)
+        if not team_info:
+            continue
+        members = user_db.get_team_members(candidate)
+        if members:
+            resolved_team_id = candidate
+            break
+
+    if not resolved_team_id:
+        raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")
 
     display_name = (settings.pm_guest_display_name or "PM Guest").strip()
-    token = create_pm_guest_token(team_id=team_id, display_name=display_name)
+    token = create_pm_guest_token(team_id=resolved_team_id, display_name=display_name)
 
     return PMGuestLoginResponse(
         token=token,
         role="pm_guest",
-        team_id=team_id,
+        team_id=resolved_team_id,
         display_name=display_name,
+    )
+
+
+@router.post("/guest/login", response_model=GuestLoginResponse)
+async def guest_login():
+    """Issue a credentialless developer guest token mapped to an existing snapshot-rich user."""
+    preferred_email = os.getenv("DEV_GUEST_EMAIL", "").strip().lower()
+
+    user = user_db.get_user_by_email(preferred_email) if preferred_email else None
+    if not user:
+        user = user_db.get_most_active_user()
+
+    if not user:
+        fallback_email = "guest@secondcortex.local"
+        fallback_password = f"guest-{(settings.jwt_secret or 'dev-secret')[:12]}"
+        fallback_display = "Guest Developer"
+
+        created = user_db.create_user(fallback_email, fallback_password, fallback_display)
+        if created:
+            user = created
+        else:
+            user = user_db.get_user_by_email(fallback_email)
+
+    if not user:
+        raise HTTPException(status_code=503, detail="Guest login unavailable. No user context is configured.")
+
+    token = create_token(user["id"], user["email"])
+    logger.info("Guest developer login mapped to user: %s", user["email"])
+
+    return GuestLoginResponse(
+        token=token,
+        role="developer_guest",
+        user_id=user["id"],
+        email=user["email"],
+        display_name=user["display_name"],
+        team_id=user.get("team_id"),
     )
 
 

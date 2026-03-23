@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { createHash } from 'crypto';
 import { EventCapture } from './capture/eventCapture';
 import { Debouncer } from './capture/debouncer';
 import { SnapshotCache } from './capture/snapshotCache';
@@ -12,6 +13,33 @@ import { registerDecisionArchaeology } from './decision/decisionHover';
 
 let eventCapture: EventCapture | undefined;
 let snapshotCache: SnapshotCache | undefined;
+
+const PROJECT_SELECTION_STATE_KEY = 'secondcortex.projects.byWorkspace';
+
+function hashWorkspacePath(workspacePath: string): string {
+    return createHash('sha256').update(workspacePath).digest('hex').slice(0, 32);
+}
+
+function getWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
+    return vscode.workspace.workspaceFolders?.[0];
+}
+
+function getWorkspaceFingerprint(workspaceFolder: vscode.WorkspaceFolder): string {
+    return hashWorkspacePath(workspaceFolder.uri.fsPath);
+}
+
+async function getRepoRemote(): Promise<string> {
+    try {
+        const gitExt = vscode.extensions.getExtension('vscode.git')?.exports;
+        const api = gitExt?.getAPI(1);
+        const repo = api?.repositories?.[0];
+        const remotes = repo?.state?.remotes || [];
+        const origin = remotes.find((remote: any) => remote.name === 'origin') || remotes[0];
+        return String(origin?.fetchUrl || origin?.pushUrl || '').trim();
+    } catch {
+        return '';
+    }
+}
 
 function resolveConfiguredUrl(
     config: vscode.WorkspaceConfiguration,
@@ -80,6 +108,103 @@ export function activate(context: vscode.ExtensionContext) {
     const backendClient = new BackendClient(backendUrl, outputChannel);
     backendClient.setAuthService(authService);
 
+    let selectedProjectId: string | undefined;
+    let sidebarProviderRef: SidebarProvider | undefined;
+
+    const getProjectMap = (): Record<string, string> => {
+        return context.workspaceState.get<Record<string, string>>(PROJECT_SELECTION_STATE_KEY, {});
+    };
+
+    const setProjectForWorkspace = async (workspaceFingerprint: string, projectId: string): Promise<void> => {
+        const map = getProjectMap();
+        map[workspaceFingerprint] = projectId;
+        await context.workspaceState.update(PROJECT_SELECTION_STATE_KEY, map);
+        selectedProjectId = projectId;
+        outputChannel.appendLine(`[SecondCortex] Active project selected: ${projectId}`);
+    };
+
+    const selectProjectInteractive = async (): Promise<string | undefined> => {
+        const projects = await backendClient.listProjects();
+        if (projects.length === 0) {
+            vscode.window.showWarningMessage('No projects found. Create one in dashboard before selecting.');
+            return undefined;
+        }
+
+        const pick = await vscode.window.showQuickPick(
+            projects.map((project) => ({
+                label: project.name,
+                description: `${project.visibility}${project.workspace_name ? ` • ${project.workspace_name}` : ''}`,
+                projectId: project.id,
+            })),
+            {
+                placeHolder: 'Select project for this workspace',
+            }
+        );
+
+        if (!pick) {
+            return undefined;
+        }
+
+        const workspaceFolder = getWorkspaceFolder();
+        if (workspaceFolder) {
+            await setProjectForWorkspace(getWorkspaceFingerprint(workspaceFolder), pick.projectId);
+            await eventCapture?.flushDeferredSnapshots(pick.projectId);
+            if (sidebarProviderRef) {
+                sidebarProviderRef.notifyProjectSelected(pick.label, pick.projectId);
+            }
+        }
+        return pick.projectId;
+    };
+
+    const resolveProjectForWorkspace = async (promptOnUnresolved: boolean): Promise<void> => {
+        const workspaceFolder = getWorkspaceFolder();
+        if (!workspaceFolder) {
+            selectedProjectId = undefined;
+            return;
+        }
+
+        const workspaceName = workspaceFolder.name;
+        const workspacePathHash = hashWorkspacePath(workspaceFolder.uri.fsPath);
+        const workspaceFingerprint = getWorkspaceFingerprint(workspaceFolder);
+        const repoRemote = await getRepoRemote();
+        const map = getProjectMap();
+        const persistedProjectId = map[workspaceFingerprint];
+
+        const resolved = await backendClient.resolveProject({
+            workspaceName,
+            workspacePathHash,
+            repoRemote,
+        });
+
+        if (resolved?.status === 'resolved' && resolved.projectId) {
+            await setProjectForWorkspace(workspaceFingerprint, resolved.projectId);
+            await eventCapture?.flushDeferredSnapshots(resolved.projectId);
+            return;
+        }
+
+        if (persistedProjectId) {
+            selectedProjectId = persistedProjectId;
+            outputChannel.appendLine(`[SecondCortex] Using persisted project selection: ${persistedProjectId}`);
+            await eventCapture?.flushDeferredSnapshots(persistedProjectId);
+            return;
+        }
+
+        selectedProjectId = undefined;
+        outputChannel.appendLine('[SecondCortex] Project unresolved for workspace; waiting for explicit selection.');
+        if (promptOnUnresolved) {
+            vscode.window
+                .showInformationMessage(
+                    'SecondCortex needs a project selection for this workspace before sending snapshots.',
+                    'Select Project'
+                )
+                .then((choice) => {
+                    if (choice === 'Select Project') {
+                        vscode.commands.executeCommand('secondcortex.selectProject');
+                    }
+                });
+        }
+    };
+
     const firewall = new SemanticFirewall(outputChannel);
     const debouncer = new Debouncer(debouncerDelayMs, noiseThresholdMs);
     snapshotCache = new SnapshotCache(context.globalStorageUri.fsPath, outputChannel);
@@ -88,11 +213,38 @@ export function activate(context: vscode.ExtensionContext) {
     const shadowGraphPanel = new ShadowGraphPanel(backendClient, resurrector, outputChannel, frontendUrl);
 
     // Data Capture
-    eventCapture = new EventCapture(debouncer, firewall, snapshotCache, backendClient, outputChannel);
+    eventCapture = new EventCapture(
+        debouncer,
+        firewall,
+        snapshotCache,
+        backendClient,
+        outputChannel,
+        () => selectedProjectId,
+        () => {
+            vscode.window
+                .showWarningMessage(
+                    'Project is not selected. Choose a project to continue snapshot ingestion.',
+                    'Select Project'
+                )
+                .then((choice) => {
+                    if (choice === 'Select Project') {
+                        vscode.commands.executeCommand('secondcortex.selectProject');
+                    }
+                });
+        }
+    );
     eventCapture.register(context);
 
     // Webview Sidebar
-    const sidebarProvider = new SidebarProvider(context.extensionUri, backendClient, authService, outputChannel);
+    const sidebarProvider = new SidebarProvider(
+        context.extensionUri,
+        backendClient,
+        authService,
+        outputChannel,
+        () => vscode.commands.executeCommand('secondcortex.selectProject'),
+        () => selectedProjectId
+    );
+    sidebarProviderRef = sidebarProvider;
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('secondcortex.chatView', sidebarProvider)
     );
@@ -158,9 +310,25 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('secondcortex.selectProject', async () => {
+            await selectProjectInteractive();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+            await resolveProjectForWorkspace(true);
+        })
+    );
+
     // Offline sync
     snapshotCache.flushToBackend(backendClient).catch((err) => {
         outputChannel.appendLine(`[SecondCortex] Offline sync error: ${err}`);
+    });
+
+    resolveProjectForWorkspace(true).catch((err) => {
+        outputChannel.appendLine(`[SecondCortex] Project resolver startup error: ${err}`);
     });
 
     outputChannel.appendLine('[SecondCortex] Extension activated successfully.');

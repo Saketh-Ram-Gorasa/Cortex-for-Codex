@@ -17,6 +17,8 @@ export default function LandingPage() {
   const [pmError, setPmError] = useState("");
   const [isPmSubmitting, setIsPmSubmitting] = useState(false);
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://sc-backend-suhaan.azurewebsites.net";
+  const extensionMarketplaceUrl = "https://marketplace.visualstudio.com/items?itemName=secondcortex-labs.secondcortex";
+  const githubRepoUrl = "https://github.com/Syed-Suhaan/SecondCortex-Labs";
 
   const loginPmSession = async (email: string, password: string, guestMode: boolean) => {
     const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
@@ -434,9 +436,9 @@ export default function LandingPage() {
           <a className="nav-login" href="/login">
             Login
           </a>
-          <button className="nav-cta" type="button">
+          <a className="nav-cta" href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">
             Install Extension -&gt;
-          </button>
+          </a>
         </div>
       </nav>
 
@@ -458,9 +460,9 @@ export default function LandingPage() {
             command.
           </p>
           <div className="hero-actions">
-            <button className="btn-primary btn-large" type="button">
+            <a className="btn-primary btn-large" href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">
               Install on VS Code
-            </button>
+            </a>
             <button className="btn-secondary btn-large" type="button">
               Read the Docs
             </button>
@@ -525,16 +527,16 @@ export default function LandingPage() {
           <div className="stat-label">Embedding Dimensions</div>
         </div>
         <div className="stat-item">
-          <div className="stat-num" data-target="11">
+          <div className="stat-num" data-target="7">
             0
           </div>
           <div className="stat-label">Technical Pivots Shipped</div>
         </div>
         <div className="stat-item">
-          <div className="stat-num" data-target="0" data-suffix="">
-            ~sub-second
+          <div className="stat-num" data-target="2" data-suffix="s">
+            0s
           </div>
-          <div className="stat-label">Context Retrieval</div>
+          <div className="stat-label">Typical Retrieval Latency</div>
         </div>
       </div>
 
@@ -921,12 +923,12 @@ export default function LandingPage() {
         </h2>
         <p className="cta-sub">Install the VS Code extension. SecondCortex starts building your memory immediately.</p>
         <div className="cta-actions">
-          <button className="btn-primary btn-large" type="button">
+          <a className="btn-primary btn-large" href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">
             Install Extension - Free
-          </button>
-          <button className="btn-secondary btn-large" type="button">
+          </a>
+          <a className="btn-secondary btn-large" href={githubRepoUrl} target="_blank" rel="noreferrer">
             View on GitHub
-          </button>
+          </a>
         </div>
       </section>
 
@@ -935,9 +937,9 @@ export default function LandingPage() {
           Second<span>Cortex</span>
         </div>
         <div className="footer-links">
-          <a href="#">GitHub</a>
+          <a href={githubRepoUrl} target="_blank" rel="noreferrer">GitHub</a>
           <a href="#">Docs</a>
-          <a href="#">VS Code Marketplace</a>
+          <a href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">VS Code Marketplace</a>
           <a href="#">MCP Protocol</a>
         </div>
         <div>Copyright 2026 SecondCortex Labs</div>

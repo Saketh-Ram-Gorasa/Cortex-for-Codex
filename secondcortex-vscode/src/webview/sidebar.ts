@@ -13,7 +13,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         private readonly extensionUri: vscode.Uri,
         private readonly backend: BackendClient,
         private readonly auth: AuthService,
-        private readonly output: vscode.OutputChannel
+        private readonly output: vscode.OutputChannel,
+        private readonly onSelectProject?: () => Promise<unknown> | unknown,
+        private readonly getSelectedProjectId?: () => string | undefined,
     ) { }
 
     resolveWebviewView(
@@ -159,6 +161,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     });
                     break;
                 }
+                case 'selectProject': {
+                    await this.onSelectProject?.();
+                    this.postMessage({
+                        type: 'projectStatus',
+                        projectId: this.getSelectedProjectId?.() || null,
+                    });
+                    break;
+                }
             }
         });
     }
@@ -168,11 +178,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this.updateHtml();
     }
 
+    notifyProjectSelected(projectName: string, projectId: string): void {
+        this.postMessage({ type: 'projectSelected', projectName, projectId });
+    }
+
     private async updateHtml(): Promise<void> {
         if (!this._view) { return; }
         const loggedIn = await this.auth.isLoggedIn();
         const user = await this.auth.getUser();
-        this._view.webview.html = this.getHtml(loggedIn, user);
+        const projectId = this.getSelectedProjectId?.();
+        this._view.webview.html = this.getHtml(loggedIn, user, projectId);
     }
 
     private postMessage(message: Record<string, unknown>): void {
@@ -219,11 +234,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         return lines;
     }
 
-    private getHtml(loggedIn: boolean, user?: { userId: string; email: string; displayName: string }): string {
+    private getHtml(
+        loggedIn: boolean,
+        user?: { userId: string; email: string; displayName: string },
+        projectId?: string,
+    ): string {
         if (!loggedIn) {
             return this.getAuthHtml();
         }
-        return this.getChatHtml(user);
+        return this.getChatHtml(user, projectId);
     }
 
     // ── Auth Page HTML ─────────────────────────────────────────────
@@ -446,7 +465,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     // ── Chat Page HTML ─────────────────────────────────────────────
 
-    private getChatHtml(user?: { userId: string; email: string; displayName: string }): string {
+    private getChatHtml(user?: { userId: string; email: string; displayName: string }, projectId?: string): string {
         const displayName = user?.displayName || user?.email || 'User';
         return /*html*/ `
 <!DOCTYPE html>
@@ -809,6 +828,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <div class="header-actions">
             <button class="icon-btn" onclick="toggleHistory()">History</button>
             <button class="icon-btn primary" onclick="startNewChat()">New Chat</button>
+            <button class="icon-btn" onclick="selectProject()">My Projects</button>
             <button class="icon-btn" onclick="doLogout()">Logout</button>
         </div>
     </div>
@@ -833,6 +853,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         </div>
         <div style="text-align: center; margin-top: 8px;">
             <span class="user-info">Logged in as ${displayName}</span>
+        </div>
+        <div style="text-align: center; margin-top: 6px;">
+            <span class="user-info" id="project-status">Project: ${projectId || 'Not selected'}</span>
         </div>
         <div class="bottom-actions">
             <button class="icon-btn" onclick="openShadowGraph()">Open Shadow Graph</button>
@@ -1028,6 +1051,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'openShadowGraph', sessionId: state.sessionId });
         }
 
+        function selectProject() {
+            vscode.postMessage({ type: 'selectProject' });
+        }
+
         sendBtn.addEventListener('click', send);
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') send();
@@ -1091,6 +1118,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     chatLog.appendChild(errWrapper);
                     chatLog.scrollTop = chatLog.scrollHeight;
                     setPendingRequest(false);
+                    break;
+                case 'projectStatus':
+                    const statusEl = document.getElementById('project-status');
+                    if (statusEl) {
+                        statusEl.textContent = 'Project: ' + (msg.projectId || 'Not selected');
+                    }
+                    break;
+                case 'projectSelected':
+                    const selectedEl = document.getElementById('project-status');
+                    if (selectedEl) {
+                        const label = msg.projectName || msg.projectId || 'Not selected';
+                        selectedEl.textContent = 'Project: ' + label;
+                    }
                     break;
             }
         });

@@ -71,6 +71,10 @@
       {
         "command": "secondcortex.openShadowGraph",
         "title": "SecondCortex: Open Shadow Graph"
+      },
+      {
+        "command": "secondcortex.selectProject",
+        "title": "SecondCortex: Select Project"
       }
     ],
     "configuration": {

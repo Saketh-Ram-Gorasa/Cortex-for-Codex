@@ -44,6 +44,39 @@ export default function AuthForm({ mode }: AuthFormProps) {
         throw new Error(errData.detail || 'Login failed. Please check your credentials.');
     };
 
+    const signupGuestSession = async () => {
+        // Use a fresh, random guest identity so guest access never depends on remembered credentials.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const generatedEmail = `guest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@secondcortex.local`;
+            const generatedPassword = `guest-${Math.random().toString(36).slice(2, 12)}-access`;
+
+            const signupRes = await fetch(`${backendUrl}/api/v1/auth/signup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: generatedEmail,
+                    password: generatedPassword,
+                    display_name: 'Guest Developer',
+                }),
+            });
+
+            if (signupRes.ok) {
+                const data = await signupRes.json();
+                persistSession(data.token, true);
+                return;
+            }
+
+            if (signupRes.status === 409) {
+                continue;
+            }
+
+            const signupErr = await signupRes.json().catch(() => ({}));
+            throw new Error(signupErr.detail || 'Guest signup is unavailable right now.');
+        }
+
+        throw new Error('Guest signup failed after multiple attempts. Please try again.');
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const emailTrim = email.trim();
@@ -91,7 +124,32 @@ export default function AuthForm({ mode }: AuthFormProps) {
         setError('');
 
         try {
-            await loginWithCredentials(guestEmail, guestPassword, true);
+            // Try dedicated guest endpoint first (no credentials needed)
+            const res = await fetch(`${backendUrl}/api/v1/auth/guest/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                persistSession(data.token, true);
+                return;
+            }
+
+            // Legacy deployment fallback when dedicated guest endpoint is unavailable.
+            if (res.status === 404) {
+                try {
+                    await loginWithCredentials(guestEmail, guestPassword, true);
+                    return;
+                } catch {
+                    // Auto-provision a fresh guest account with no user input.
+                    await signupGuestSession();
+                    return;
+                }
+            }
+
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Guest login unavailable.');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Guest login failed.');
         } finally {

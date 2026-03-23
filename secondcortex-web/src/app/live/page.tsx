@@ -8,7 +8,7 @@ export const metadata = {
 
 export default function LivePage() {
     return (
-        <main className="h-screen w-screen overflow-hidden">
+        <main className="min-h-screen w-full">
             <Suspense fallback={null}>
                 <AuthGate />
             </Suspense>

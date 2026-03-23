@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,40 +39,13 @@ class SummaryService:
         total_commits = 0
         active_members = 0
         
-        for member in members:
-            user_id = member["id"]
-            
-            # Get snapshot count for today
-            snapshot_count = self._get_snapshot_count_for_day(user_id, team_id, days_ago=0)
-            
-            # Get commits for today
-            commit_count = self._get_commit_count(user_id, days=1)
-            
-            # Get languages used today
-            languages = self._get_languages_used(user_id, days=1)
-            
-            # Get files modified today
-            files_modified = self._get_files_modified(user_id, days=1)
-            
-            is_active = snapshot_count > 0 or commit_count > 0
-            if is_active:
+        member_rows = self._compute_members_activity(members, days=1)
+        for row in member_rows:
+            if row["is_active"]:
                 active_members += 1
-            
-            total_snapshots += snapshot_count
-            total_commits += commit_count
-            
-            member_summaries.append(
-                MemberSummary(
-                    user_id=user_id,
-                    display_name=member["display_name"],
-                    email=member["email"],
-                    snapshots_count=snapshot_count,
-                    commits_count=commit_count,
-                    languages_used=languages,
-                    files_modified=files_modified,
-                    status="active" if is_active else "idle",
-                )
-            )
+            total_snapshots += row["snapshot_count"]
+            total_commits += row["commit_count"]
+            member_summaries.append(row["summary"])
         
         return {
             "team_id": team_id,
@@ -96,46 +70,26 @@ class SummaryService:
         active_members = 0
         daily_breakdown = {}
         
-        for member in members:
-            user_id = member["id"]
-            
-            # Get snapshot count for this week
-            snapshot_count = self._get_snapshot_count(user_id, team_id, days=7)
-            
-            # Get commits for this week
-            commit_count = self._get_commit_count(user_id, days=7)
-            
-            # Get languages used this week
-            languages = self._get_languages_used(user_id, days=7)
-            
-            # Get files modified this week
-            files_modified = self._get_files_modified(user_id, days=7)
-            
-            is_active = snapshot_count > 0 or commit_count > 0
-            if is_active:
+        member_rows = self._compute_members_activity(members, days=7)
+        date_counts: dict[datetime.date, int] = {}
+        for row in member_rows:
+            if row["is_active"]:
                 active_members += 1
-            
-            total_snapshots += snapshot_count
-            total_commits += commit_count
-            
-            member_summaries.append(
-                MemberSummary(
-                    user_id=user_id,
-                    display_name=member["display_name"],
-                    email=member["email"],
-                    snapshots_count=snapshot_count,
-                    commits_count=commit_count,
-                    languages_used=languages,
-                    files_modified=files_modified,
-                    status="active" if is_active else "idle",
-                )
-            )
-        
-        # Build daily breakdown for the week
+
+            total_snapshots += row["snapshot_count"]
+            total_commits += row["commit_count"]
+            member_summaries.append(row["summary"])
+
+            for entry in row["activity"]:
+                day_dt = entry["timestamp"].date()
+                date_counts[day_dt] = date_counts.get(day_dt, 0) + 1
+
+        # Build daily breakdown for the week from already-fetched activity
+        now = datetime.utcnow()
         for i in range(7):
-            day = (datetime.utcnow() - timedelta(days=i)).strftime("%A")
-            count = self._get_team_snapshot_count_for_day(team_id, i)
-            daily_breakdown[day] = count
+            day_dt = (now - timedelta(days=i)).date()
+            day = (now - timedelta(days=i)).strftime("%A")
+            daily_breakdown[day] = date_counts.get(day_dt, 0)
         
         return {
             "team_id": team_id,
@@ -146,6 +100,42 @@ class SummaryService:
             "active_members": active_members,
             "daily_breakdown": daily_breakdown,
             "generated_at": datetime.utcnow().isoformat(),
+        }
+
+    def _compute_members_activity(self, members: list[dict], days: int) -> list[dict]:
+        if not members:
+            return []
+
+        max_workers = max(1, min(8, len(members)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(executor.map(lambda member: self._compute_member_activity(member, days), members))
+
+    def _compute_member_activity(self, member: dict, days: int) -> dict:
+        user_id = member["id"]
+        activity = self._get_user_vector_activity_window(user_id, days=days)
+        snapshot_count = len(activity)
+        commit_count = self._get_commit_count(user_id, days=days)
+
+        languages = self._infer_languages_from_files([entry["active_file"] for entry in activity])
+        files_modified = len({entry["active_file"] for entry in activity if entry["active_file"]})
+        is_active = snapshot_count > 0 or commit_count > 0
+
+        summary = MemberSummary(
+            user_id=user_id,
+            display_name=member["display_name"],
+            email=member["email"],
+            snapshots_count=snapshot_count,
+            commits_count=commit_count,
+            languages_used=languages,
+            files_modified=files_modified,
+            status="active" if is_active else "idle",
+        )
+        return {
+            "summary": summary,
+            "snapshot_count": snapshot_count,
+            "commit_count": commit_count,
+            "is_active": is_active,
+            "activity": activity,
         }
 
     def generate_user_daily_summary(self, user_id: str) -> dict:
@@ -316,6 +306,23 @@ class SummaryService:
         except Exception as exc:
             logger.error("Failed to compute vector activity for user=%s: %s", user_id, exc)
             return []
+
+    def _get_user_vector_activity_window(self, user_id: str, days: int) -> list[dict]:
+        activity = self._get_user_vector_activity(user_id)
+        cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+        return [entry for entry in activity if entry["timestamp"] >= cutoff]
+
+    def _get_team_vector_snapshot_count_for_day(self, team_id: str, days_ago: int) -> int:
+        members = self.user_db.get_team_members(team_id)
+        target_date = (datetime.utcnow() - timedelta(days=days_ago)).date()
+        total = 0
+        for member in members:
+            user_id = member.get("id")
+            if not user_id:
+                continue
+            activity = self._get_user_vector_activity(user_id)
+            total += sum(1 for entry in activity if entry["timestamp"].date() == target_date)
+        return total
 
     def _infer_languages_from_files(self, file_paths: list[str]) -> list[str]:
         extension_map = {

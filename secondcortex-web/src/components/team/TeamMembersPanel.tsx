@@ -12,21 +12,32 @@ interface TeamMember {
 interface TeamMembersPanelProps {
   teamId: string;
   teamInfo: any;
-  token: string | null;
+  token: string;
+  backendUrl: string;
+  selectedMemberId: string | null;
+  onSelectMember: (memberId: string) => void;
 }
 
-export default function TeamMembersPanel({ teamId, teamInfo, token }: TeamMembersPanelProps) {
+export default function TeamMembersPanel({
+  teamId,
+  teamInfo,
+  token,
+  backendUrl,
+  selectedMemberId,
+  onSelectMember,
+}: TeamMembersPanelProps) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!token) return;
-
     const fetchMembers = async () => {
       try {
-        const response = await fetch(`/api/v1/teams/${teamId}/members`, {
+        const response = await fetch(`${backendUrl}/api/v1/teams/${teamId}/members`, {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (!response.ok) {
+          throw new Error(`Failed to fetch members (${response.status})`);
+        }
         const data = await response.json();
         setMembers(data);
       } catch (error) {
@@ -37,7 +48,17 @@ export default function TeamMembersPanel({ teamId, teamInfo, token }: TeamMember
     };
 
     fetchMembers();
-  }, [teamId, token]);
+  }, [teamId, token, backendUrl]);
+
+  useEffect(() => {
+    if (members.length === 0) {
+      return;
+    }
+
+    if (!selectedMemberId || !members.some((member) => member.id === selectedMemberId)) {
+      onSelectMember(members[0].id);
+    }
+  }, [members, selectedMemberId, onSelectMember]);
 
   if (loading) {
     return <div className="p-4 text-sm">Loading members...</div>;
@@ -50,7 +71,12 @@ export default function TeamMembersPanel({ teamId, teamInfo, token }: TeamMember
         {members.map((member) => (
           <div
             key={member.id}
-            className="text-sm p-2 bg-slate-800 rounded hover:bg-slate-700 cursor-pointer truncate"
+            onClick={() => onSelectMember(member.id)}
+            className={`text-sm p-2 rounded cursor-pointer truncate border ${
+              selectedMemberId === member.id
+                ? 'bg-emerald-700/30 border-emerald-500'
+                : 'bg-slate-800 border-slate-700 hover:bg-slate-700'
+            }`}
             title={member.display_name}
           >
             {member.display_name}

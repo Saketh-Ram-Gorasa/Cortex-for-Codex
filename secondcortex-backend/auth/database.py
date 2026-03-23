@@ -103,6 +103,7 @@ class UserDB:
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     team_id TEXT,
+                    project_id TEXT,
                     workspace TEXT NOT NULL,
                     active_file TEXT NOT NULL,
                     git_branch TEXT,
@@ -117,6 +118,10 @@ class UserDB:
             """)
             try:
                 conn.execute("ALTER TABLE synced_snapshots ADD COLUMN enriched_context TEXT NOT NULL DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE synced_snapshots ADD COLUMN project_id TEXT")
             except sqlite3.OperationalError:
                 pass
             conn.execute("""
@@ -273,6 +278,40 @@ class UserDB:
             return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
         return None
 
+    def get_user_by_email(self, email: str) -> dict | None:
+        """Lookup a user by email."""
+        normalized_email = email.lower().strip()
+        if not normalized_email:
+            return None
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT id, email, display_name, team_id FROM users WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+        if row:
+            return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
+        return None
+
+    def get_most_active_user(self) -> dict | None:
+        """Return the user with the largest snapshot history (fallback for guest login)."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT u.id, u.email, u.display_name, u.team_id
+                FROM users u
+                INNER JOIN (
+                    SELECT user_id, COUNT(*) AS snapshot_count, MAX(timestamp) AS last_snapshot
+                    FROM synced_snapshots
+                    GROUP BY user_id
+                    ORDER BY snapshot_count DESC, last_snapshot DESC
+                    LIMIT 1
+                ) s ON s.user_id = u.id
+                """
+            ).fetchone()
+        if row:
+            return {"id": row[0], "email": row[1], "display_name": row[2], "team_id": row[3]}
+        return None
+
     def get_team_member_ids(self, user_id: str) -> list[str]:
         """Return all user IDs visible to this user by team scope rules."""
         user = self.get_user_by_id(user_id)
@@ -299,12 +338,13 @@ class UserDB:
             conn.execute(
                 """
                 INSERT INTO synced_snapshots (
-                    id, user_id, team_id, workspace, active_file, git_branch,
+                    id, user_id, team_id, project_id, workspace, active_file, git_branch,
                     terminal_commands, summary, enriched_context, timestamp, synced
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=excluded.user_id,
                     team_id=excluded.team_id,
+                    project_id=excluded.project_id,
                     workspace=excluded.workspace,
                     active_file=excluded.active_file,
                     git_branch=excluded.git_branch,
@@ -318,6 +358,7 @@ class UserDB:
                     row.get("id"),
                     row.get("user_id"),
                     row.get("team_id"),
+                    row.get("project_id"),
                     row.get("workspace"),
                     row.get("active_file"),
                     row.get("git_branch"),
@@ -341,7 +382,7 @@ class UserDB:
             for member_id in member_ids:
                 cursor = conn.execute(
                     """
-                    SELECT id, user_id, team_id, workspace, active_file, git_branch,
+                    SELECT id, user_id, team_id, project_id, workspace, active_file, git_branch,
                               terminal_commands, summary, enriched_context, timestamp, synced
                     FROM synced_snapshots
                     WHERE user_id = ?
@@ -355,14 +396,15 @@ class UserDB:
                         "id": row[0],
                         "user_id": row[1],
                         "team_id": row[2],
-                        "workspace": row[3],
-                        "active_file": row[4],
-                        "git_branch": row[5],
-                        "terminal_commands": row[6],
-                        "summary": row[7],
-                        "enriched_context": row[8],
-                        "timestamp": row[9],
-                        "synced": row[10],
+                        "project_id": row[3],
+                        "workspace": row[4],
+                        "active_file": row[5],
+                        "git_branch": row[6],
+                        "terminal_commands": row[7],
+                        "summary": row[8],
+                        "enriched_context": row[9],
+                        "timestamp": row[10],
+                        "synced": row[11],
                     })
 
         all_rows.sort(key=lambda r: int(r.get("timestamp") or 0), reverse=True)
@@ -376,7 +418,7 @@ class UserDB:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT id, user_id, team_id, workspace, active_file, git_branch,
+                SELECT id, user_id, team_id, project_id, workspace, active_file, git_branch,
                           terminal_commands, summary, enriched_context, timestamp, synced
                 FROM synced_snapshots
                 WHERE user_id = ?
@@ -390,14 +432,15 @@ class UserDB:
                     "id": row[0],
                     "user_id": row[1],
                     "team_id": row[2],
-                    "workspace": row[3],
-                    "active_file": row[4],
-                    "git_branch": row[5],
-                    "terminal_commands": row[6],
-                    "summary": row[7],
-                    "enriched_context": row[8],
-                    "timestamp": row[9],
-                    "synced": row[10],
+                    "project_id": row[3],
+                    "workspace": row[4],
+                    "active_file": row[5],
+                    "git_branch": row[6],
+                    "terminal_commands": row[7],
+                    "summary": row[8],
+                    "enriched_context": row[9],
+                    "timestamp": row[10],
+                    "synced": row[11],
                 })
 
         return rows
@@ -537,9 +580,45 @@ class UserDB:
                 (team_id,),
             )
             rows = cursor.fetchall()
+            if rows:
+                return [
+                    {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
+                    for r in rows
+                ]
+
+            # Fallback 1: users table team_id assignment.
+            fallback_users = conn.execute(
+                """
+                SELECT id, email, display_name, created_at
+                FROM users
+                WHERE team_id = ?
+                ORDER BY created_at ASC
+                """,
+                (team_id,),
+            ).fetchall()
+            if fallback_users:
+                return [
+                    {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
+                    for r in fallback_users
+                ]
+
+            # Fallback 2: infer members from snapshot history in this team scope.
+            snapshot_users = conn.execute(
+                """
+                SELECT u.id, u.email, u.display_name, u.created_at
+                FROM users u
+                INNER JOIN (
+                    SELECT DISTINCT user_id
+                    FROM synced_snapshots
+                    WHERE team_id = ?
+                ) ss ON ss.user_id = u.id
+                ORDER BY u.created_at ASC
+                """,
+                (team_id,),
+            ).fetchall()
             return [
                 {"id": r[0], "email": r[1], "display_name": r[2], "created_at": r[3]}
-                for r in rows
+                for r in snapshot_users
             ]
 
     def get_team_info(self, team_id: str) -> dict | None:
@@ -568,3 +647,89 @@ class UserDB:
                 "created_at": row[3],
                 "member_count": member_count,
             }
+
+    def get_most_active_team_id(self) -> str | None:
+        """Return the team_id with the most recent/highest snapshot activity."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT team_id
+                FROM synced_snapshots
+                WHERE team_id IS NOT NULL AND TRIM(team_id) != ''
+                GROUP BY team_id
+                ORDER BY COUNT(*) DESC, MAX(timestamp) DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0])
+
+            # Fallback if snapshot rows are sparse/missing team_id values.
+            row = conn.execute(
+                """
+                SELECT team_id
+                FROM users
+                WHERE team_id IS NOT NULL AND TRIM(team_id) != ''
+                GROUP BY team_id
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0])
+
+        return None
+
+    def get_user_teams(self, user_id: str) -> list[dict]:
+        """Return all teams a user belongs to (supports historical memberships)."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT t.id, t.name, t.team_lead_id, t.created_at, COUNT(tm2.user_id) as member_count
+                FROM teams t
+                INNER JOIN team_members tm ON tm.team_id = t.id
+                LEFT JOIN team_members tm2 ON tm2.team_id = t.id
+                WHERE tm.user_id = ?
+                GROUP BY t.id, t.name, t.team_lead_id, t.created_at
+                ORDER BY t.created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+
+            if rows:
+                return [
+                    {
+                        "id": r[0],
+                        "name": r[1],
+                        "team_lead_id": r[2],
+                        "created_at": r[3],
+                        "member_count": int(r[4] or 0),
+                    }
+                    for r in rows
+                ]
+
+            user_row = conn.execute(
+                "SELECT team_id FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if not user_row or not user_row[0]:
+                return []
+
+            fallback_team = self.get_team_info(str(user_row[0]))
+            return [fallback_team] if fallback_team else []
+
+    def is_user_in_team(self, user_id: str, team_id: str) -> bool:
+        """Check membership by team_members first, then users.team_id fallback."""
+        with sqlite3.connect(self.db_path) as conn:
+            membership = conn.execute(
+                "SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? LIMIT 1",
+                (team_id, user_id),
+            ).fetchone()
+            if membership:
+                return True
+
+            fallback = conn.execute(
+                "SELECT 1 FROM users WHERE id = ? AND team_id = ? LIMIT 1",
+                (user_id, team_id),
+            ).fetchone()
+            return bool(fallback)
