@@ -417,15 +417,15 @@ def _summarize_task_context(domain: str, task_type: str, snapshots: list[dict]) 
 @_track_mcp_tool("search_memory")
 async def search_memory(query: str, api_key: str | None = None, top_k: int | None = None) -> str:
     """
-    Search the developer's SecondCortex memory (IDE history snapshots) for relevant technical context.
+    Search the developer's SecondCortex memory (long-term facts + short-term snapshots) for relevant technical context.
     
     Args:
         query: The semantic search query (e.g., "authentication logic", "database schema changes")
         api_key: Optional explicit MCP API key (legacy flow). If omitted, SECONDCORTEX_MCP_API_KEY env var is used.
-        top_k: Number of relevant snapshots to retrieve (default: 5)
+        top_k: Number of relevant results to retrieve per source (default: 5)
     
     Returns:
-        A formatted summary string containing the best matching historical IDE snapshots.
+        A formatted summary string containing both facts (long-term memory) and snapshots (short-term memory).
     """
     user, normalized_query, safe_top_k, error = _authenticate_request(api_key=api_key, query=query, top_k=top_k)
     if error:
@@ -436,50 +436,73 @@ async def search_memory(query: str, api_key: str | None = None, top_k: int | Non
     user_id = user["id"]
     logger.info(f"MCP Authenticated for user: {user.get('display_name', user_id)}")
     
-    results = await vector_db.semantic_search(normalized_query, top_k=safe_top_k, user_id=user_id)
+    # Dual retrieval: facts (long-term) + snapshots (short-term)
+    facts = await vector_db.recall_facts(normalized_query, top_k=safe_top_k, user_id=user_id, min_salience=0.3)
+    snapshots = await vector_db.semantic_search(normalized_query, top_k=safe_top_k, user_id=user_id)
     
-    if not results:
-        return f"No relevant cortex memory found for query: '{normalized_query}'"
+    output_parts = []
     
-    # Format the results into a readable string for the LLM
-    output_parts = [f"Found {len(results)} relevant snapshots for '{normalized_query}':\n"]
-    
-    for i, meta in enumerate(results):
-        timestamp = meta.get("timestamp", "Unknown Time")
-        file_path = meta.get("active_file", "Unknown File")
-        branch = meta.get("git_branch", "Unknown Branch")
-        summary = meta.get("summary", "No summary")
-        
-        chunk = (
-            f"--- Snapshot {i+1} ---\n"
-            f"Time: {timestamp}\n"
-            f"File: {file_path}\n"
-            f"Branch: {branch}\n"
-            f"Summary: {summary}\n"
-            f"Entities: {meta.get('entities', 'None')}\n"
-        )
-        source_type = str(meta.get("source_type") or "").strip()
-        source_uri = str(meta.get("source_uri") or "").strip()
-        confidence = meta.get("confidence_score")
-        if source_type:
-            chunk += f"Source: {source_type}\n"
-        if source_uri:
-            chunk += f"Source URI: {source_uri}\n"
-        if confidence not in (None, ""):
-            chunk += f"Confidence: {confidence}\n"
-        
-        # Include shadow graph (code context) if available
-        # Note: 'document' might be populated if we used a method that fetched documents, 
-        # but semantic_search currently returns dicts from metadata. 
-        # We can include what's available. `shadow_graph` is stored in metadata up to 5000 chars.
-        code_context = meta.get("shadow_graph")
-        if code_context:
-            # truncate code slightly for MCP to avoid exploding context windows unnecessarily
-            code_snippet = code_context[:1000] + ("..." if len(code_context) > 1000 else "")
-            chunk += f"Code Context:\n```\n{code_snippet}\n```\n"
+    # Format facts section (long-term memory)
+    if facts:
+        output_parts.append(f"=== FACTS (LONG-TERM MEMORY) ===\nFound {len(facts)} relevant facts for '{normalized_query}':\n")
+        for i, fact in enumerate(facts):
+            kind = fact.get("kind", "unknown")
+            content = fact.get("document", "No content")
+            salience = fact.get("salience", 0.5)
+            confidence = fact.get("confidence", 0.7)
+            entities = fact.get("entities", [])
+            source_snapshot = fact.get("source_snapshot_id", "Unknown")
             
-        output_parts.append(chunk)
-        
+            chunk = (
+                f"--- Fact {i+1} ({kind}) ---\n"
+                f"Content: {content}\n"
+                f"Salience: {salience:.1%} | Confidence: {confidence:.1%}\n"
+                f"Entities: {', '.join(entities) if entities else 'None'}\n"
+                f"Source: Snapshot {source_snapshot[:8] if source_snapshot else 'Unknown'}\n"
+            )
+            output_parts.append(chunk)
+    else:
+        output_parts.append(f"No relevant facts found for '{normalized_query}'.\n")
+    
+    output_parts.append("\n=== SNAPSHOTS (SHORT-TERM MEMORY) ===\n")
+    
+    # Format snapshots section (short-term memory)
+    if snapshots:
+        output_parts.append(f"Found {len(snapshots)} relevant snapshots for '{normalized_query}':\n")
+        for i, meta in enumerate(snapshots):
+            timestamp = meta.get("timestamp", "Unknown Time")
+            file_path = meta.get("active_file", "Unknown File")
+            branch = meta.get("git_branch", "Unknown Branch")
+            summary = meta.get("summary", "No summary")
+            
+            chunk = (
+                f"--- Snapshot {i+1} ---\n"
+                f"Time: {timestamp}\n"
+                f"File: {file_path}\n"
+                f"Branch: {branch}\n"
+                f"Summary: {summary}\n"
+                f"Entities: {meta.get('entities', 'None')}\n"
+            )
+            source_type = str(meta.get("source_type") or "").strip()
+            source_uri = str(meta.get("source_uri") or "").strip()
+            confidence = meta.get("confidence_score")
+            if source_type:
+                chunk += f"Source: {source_type}\n"
+            if source_uri:
+                chunk += f"Source URI: {source_uri}\n"
+            if confidence not in (None, ""):
+                chunk += f"Confidence: {confidence}\n"
+            
+            # Include shadow graph (code context) if available
+            code_context = meta.get("shadow_graph")
+            if code_context:
+                code_snippet = code_context[:1000] + ("..." if len(code_context) > 1000 else "")
+                chunk += f"Code Context:\n```\n{code_snippet}\n```\n"
+                
+            output_parts.append(chunk)
+    else:
+        output_parts.append(f"No relevant snapshots found for '{normalized_query}'.\n")
+            
     return "\n".join(output_parts)
 
 
