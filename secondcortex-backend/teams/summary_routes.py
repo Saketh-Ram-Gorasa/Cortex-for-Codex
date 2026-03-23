@@ -34,8 +34,7 @@ def _authorize_team_summary_read(team_id: str, principal: dict) -> None:
         return
 
     user_id = str(principal.get("sub") or "")
-    user = user_db.get_user_by_id(user_id)
-    if not user or user.get("team_id") != team_id:
+    if not user_db.is_user_in_team(user_id, team_id):
         raise HTTPException(status_code=403, detail="You are not a member of this team")
 
 

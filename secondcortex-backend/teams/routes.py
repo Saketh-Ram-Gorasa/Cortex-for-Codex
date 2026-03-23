@@ -112,9 +112,15 @@ def _authorize_team_read(team_id: str, principal: dict, user_db: UserDB) -> None
         return
 
     user_id = str(principal.get("sub") or "")
-    user = user_db.get_user_by_id(user_id)
-    if not user or user.get("team_id") != team_id:
+    if not user_db.is_user_in_team(user_id, team_id):
         raise HTTPException(status_code=403, detail="You are not a member of this team")
+
+
+@router.get("/mine", response_model=list[TeamInfo])
+async def get_my_teams(user_id: str = Depends(get_current_user)):
+    """Get all teams the current user belongs to."""
+    teams = user_db.get_user_teams(user_id)
+    return [TeamInfo(**team) for team in teams]
 
 
 @router.post("", response_model=CreateTeamResponse)
