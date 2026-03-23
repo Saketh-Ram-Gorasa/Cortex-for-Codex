@@ -120,7 +120,7 @@ export default function TeamDashboard({
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      text: 'Welcome PM. Chat is connected to the integrated backend LLM. Use member summary buttons for daily, weekly, or feature compression views.',
+      text: 'Welcome Team Space. Chat is connected to the integrated backend LLM. Use member summary buttons for daily, weekly, or feature compression views.',
     },
   ]);
 
@@ -372,24 +372,21 @@ export default function TeamDashboard({
   return (
     <div className="sc-dashboard-wrap">
       <div className="sc-dashboard-inner">
-        {onClose && (
-          <div style={{ marginBottom: 10 }}>
-            <button type="button" className="btn-secondary" onClick={onClose}>
-              Back to Developer Dashboard
-            </button>
-          </div>
-        )}
-
         <div className="sc-section-header pm-header">
-          <p className="section-label">PM Control Surface</p>
-          <h1 className="section-title pm-title">My Teams Dashboard</h1>
+          <p className="section-label">Team Control Surface</p>
+          <h1 className="section-title pm-title">Team Dashboard</h1>
           <p className="section-desc">
             Chat uses the integrated backend LLM. Compressed summaries are shown in member mini-boxes: Daily, Weekly,
             Feature.
           </p>
-          <p className="pm-mode-chip">Authenticated PM Session</p>
+          <p className="pm-mode-chip">Team Space Session</p>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            {onClose && (
+              <button type="button" className="btn-secondary" onClick={onClose}>
+                Back to Developer Dashboard
+              </button>
+            )}
             {teams.map((team) => (
               <button
                 key={team.id}
@@ -397,7 +394,7 @@ export default function TeamDashboard({
                 className="btn-secondary"
                 onClick={() => onTeamChange?.(team.id)}
                 style={{
-                  borderColor: team.id === teamId ? 'var(--accent)' : undefined,
+                  borderColor: team.id === teamId ? 'var(--text)' : undefined,
                   color: team.id === teamId ? 'var(--text)' : undefined,
                 }}
               >
@@ -499,7 +496,7 @@ export default function TeamDashboard({
 
           <section className="pm-panel">
             <p className="pm-panel-kicker">Assistant</p>
-            <h2 className="pm-panel-title">PM Chatbot</h2>
+            <h2 className="pm-panel-title">Team Chatbot</h2>
             <p className="pm-chat-sub">Powered by the integrated LLM endpoint (`/api/v1/pm/query`).</p>
 
             <div className="pm-chat-quick">
@@ -533,7 +530,7 @@ export default function TeamDashboard({
                     void sendQuestion(question);
                   }
                 }}
-                placeholder="Ask PM progress question"
+                placeholder="Ask team progress question"
               />
               <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
                 {chatPending ? 'Asking...' : 'Ask'}

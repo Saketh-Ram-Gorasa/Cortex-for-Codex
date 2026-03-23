@@ -120,24 +120,6 @@ export default function Dashboard({
         return () => window.clearInterval(intervalId);
     }, [fetchStats]);
 
-    useEffect(() => {
-        if (!showTeamDashboard) {
-            return;
-        }
-
-        const marker = { scTeamDashboard: true };
-        window.history.pushState(marker, '');
-
-        const onPopState = () => {
-            setShowTeamDashboard(false);
-        };
-
-        window.addEventListener('popstate', onPopState);
-        return () => {
-            window.removeEventListener('popstate', onPopState);
-        };
-    }, [showTeamDashboard]);
-
     const fetchMyTeams = useCallback(async () => {
         setTeamLoading(true);
         setTeamActionError(null);
@@ -261,9 +243,6 @@ export default function Dashboard({
                 onTeamChange={setSelectedTeamId}
                 onClose={() => {
                     setShowTeamDashboard(false);
-                    if (window.history.state?.scTeamDashboard) {
-                        window.history.back();
-                    }
                 }}
             />
         );
