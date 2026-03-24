@@ -96,69 +96,102 @@ export default function ProjectManager({
     onProjectsChanged();
   };
 
+  const deleteProject = async (project: ProjectItem) => {
+    if (!window.confirm(`Delete project "${project.name}"? This cannot be undone.`)) {
+      return;
+    }
+    const response = await fetch(`${backendUrl}/api/v1/projects/${project.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      return;
+    }
+    await loadProjects();
+    onProjectsChanged();
+  };
+
   return (
-    <div className="sc-dashboard-panel" style={{ marginBottom: '16px' }}>
-      <div className="sc-dashboard-panel-inner" style={{ display: 'block' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <h2 className="sc-dashboard-h2" style={{ margin: 0 }}>My Projects</h2>
-          <button className="btn-secondary" onClick={onClose} type="button">Close</button>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-          <input
-            value={newProjectName}
-            onChange={(event) => setNewProjectName(event.target.value)}
-            placeholder="New project name"
-            style={{
-              flex: 1,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              borderRadius: '8px',
-              padding: '8px 10px',
-              fontSize: '12px',
-            }}
-          />
-          <button className="btn-primary" onClick={createProject} type="button">Create</button>
-        </div>
-
-        <div style={{ display: 'grid', gap: '8px' }}>
-          {projects.map((project) => (
-            <div
-              key={project.id}
-              style={{
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                padding: '8px',
-                display: 'flex',
-                gap: '8px',
-                alignItems: 'center',
-              }}
-            >
-              <input
-                value={renameValueById[project.id] || ''}
-                onChange={(event) =>
-                  setRenameValueById((prev) => ({
-                    ...prev,
-                    [project.id]: event.target.value,
-                  }))
-                }
-                style={{
-                  flex: 1,
-                  border: '1px solid var(--border)',
-                  background: 'var(--surface)',
-                  color: 'var(--text)',
-                  borderRadius: '8px',
-                  padding: '6px 8px',
-                  fontSize: '12px',
-                }}
-              />
-              <button className="btn-secondary" onClick={() => renameProject(project.id)} type="button">Rename</button>
-              <button className="btn-secondary" onClick={() => toggleArchive(project)} type="button">
-                {project.is_archived ? 'Unarchive' : 'Archive'}
-              </button>
+    <div className="sc-modal-wrap">
+      <div className="sc-modal-backdrop" onClick={onClose} />
+      <div className="sc-modal-card" style={{ maxWidth: 560 }}>
+        <div className="sc-modal-stack">
+          <div className="sc-modal-head">
+            <div className="sc-modal-emoji">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="2.3" y="3" width="11.4" height="10" rx="1.4" /><path d="M2.3 6.2h11.4" /><path d="M5 9h2.5" /></svg>
             </div>
-          ))}
+            <h3 className="sc-modal-title">My Projects</h3>
+            <p className="sc-modal-sub">Create, rename, or archive your projects.</p>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+              placeholder="New project name"
+              className="sc-auth-input"
+              style={{ flex: 1, marginBottom: 0 }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  createProject();
+                }
+              }}
+            />
+            <button className="btn-primary" onClick={createProject} type="button">Create</button>
+          </div>
+
+          <div style={{ display: 'grid', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+            {projects.map((project) => (
+              <div
+                key={project.id}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '8px',
+                  display: 'flex',
+                  gap: '8px',
+                  alignItems: 'center',
+                  background: project.is_archived ? 'rgba(255,255,255,0.02)' : 'transparent',
+                  opacity: project.is_archived ? 0.6 : 1,
+                }}
+              >
+                <input
+                  value={renameValueById[project.id] || ''}
+                  onChange={(event) =>
+                    setRenameValueById((prev) => ({
+                      ...prev,
+                      [project.id]: event.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: 1,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text)',
+                    borderRadius: '8px',
+                    padding: '6px 8px',
+                    fontSize: '12px',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                />
+                <button className="btn-secondary" onClick={() => renameProject(project.id)} type="button" style={{ fontSize: '11px', padding: '6px 10px' }}>Rename</button>
+                <button className="btn-secondary" onClick={() => toggleArchive(project)} type="button" style={{ fontSize: '11px', padding: '6px 10px' }}>
+                  {project.is_archived ? 'Unarchive' : 'Archive'}
+                </button>
+                <button className="btn-secondary" onClick={() => deleteProject(project)} type="button" style={{ fontSize: '11px', padding: '6px 10px', color: '#ff6b6b' }}>Delete</button>
+              </div>
+            ))}
+            {projects.length === 0 && (
+              <p style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>No projects yet. Create one above.</p>
+            )}
+          </div>
+
+          <button
+            onClick={onClose}
+            className="btn-primary sc-modal-close"
+          >
+            Done
+          </button>
         </div>
       </div>
     </div>

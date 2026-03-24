@@ -49,14 +49,20 @@ export default function ProjectSelector({
           return;
         }
 
+        // If there's already a valid selection, keep it
         const selectedProject = visibleProjects.find((project) => project.id === selectedProjectId) || null;
         if (selectedProject) {
           onSelectedNameChange?.(selectedProject.name);
           return;
         }
 
-        onChange(visibleProjects[0].id);
-        onSelectedNameChange?.(visibleProjects[0].name);
+        // Default to a project containing "secondcortex" in the name, or fallback to first
+        const defaultProject =
+          visibleProjects.find((p) => p.name.toLowerCase().includes('secondcortex')) ||
+          visibleProjects[0];
+
+        onChange(defaultProject.id);
+        onSelectedNameChange?.(defaultProject.name);
       } catch {
         setProjects([]);
         onSelectedNameChange?.(null);
@@ -79,15 +85,7 @@ export default function ProjectSelector({
     <select
       value={selectedProjectId || ''}
       onChange={(event) => handleSelectChange(event.target.value)}
-      style={{
-        border: '1px solid var(--border)',
-        background: 'var(--surface)',
-        color: 'var(--text)',
-        borderRadius: '8px',
-        padding: '8px 10px',
-        fontSize: '12px',
-        minWidth: '180px',
-      }}
+      className="sc-navbar-select"
     >
       {projects.length === 0 ? (
         <option value="">No Projects</option>

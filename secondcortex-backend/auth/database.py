@@ -905,3 +905,88 @@ class UserDB:
                 (user_id, team_id),
             ).fetchone()
             return bool(fallback)
+
+    def rename_team(self, team_id: str, new_name: str, team_lead_id: str) -> dict | None:
+        """Rename a team. Only the team lead can rename."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT id, name, team_lead_id FROM teams WHERE id = ?",
+                (team_id,),
+            ).fetchone()
+            if not row:
+                return None
+            if row[2] != team_lead_id:
+                raise ValueError("Only the team lead can rename a team")
+            conn.execute(
+                "UPDATE teams SET name = ? WHERE id = ?",
+                (new_name.strip(), team_id),
+            )
+            conn.commit()
+        return self.get_team_info(team_id)
+
+    def delete_team(self, team_id: str, team_lead_id: str) -> bool:
+        """Delete a team and cascade-clear all memberships. Team lead only."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT team_lead_id FROM teams WHERE id = ?",
+                (team_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Team not found")
+            if row[0] != team_lead_id:
+                raise ValueError("Only the team lead can delete a team")
+            conn.execute("DELETE FROM team_members WHERE team_id = ?", (team_id,))
+            conn.execute("DELETE FROM invite_codes WHERE team_id = ?", (team_id,))
+            conn.execute(
+                "UPDATE users SET team_id = NULL WHERE team_id = ?",
+                (team_id,),
+            )
+            conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+            conn.commit()
+        return True
+
+    def leave_team(self, user_id: str, team_id: str) -> bool:
+        """Remove a user from a team. Team leads cannot leave their own team."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT team_lead_id FROM teams WHERE id = ?",
+                (team_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Team not found")
+            if row[0] == user_id:
+                raise ValueError("Team lead cannot leave the team. Delete the team or transfer leadership first.")
+            conn.execute(
+                "DELETE FROM team_members WHERE team_id = ? AND user_id = ?",
+                (team_id, user_id),
+            )
+            conn.execute(
+                "UPDATE users SET team_id = NULL WHERE id = ? AND team_id = ?",
+                (user_id, team_id),
+            )
+            conn.commit()
+        return True
+
+    def remove_member(self, team_id: str, member_id: str, team_lead_id: str) -> bool:
+        """Remove a member from a team. Only the team lead can do this."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT team_lead_id FROM teams WHERE id = ?",
+                (team_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Team not found")
+            if row[0] != team_lead_id:
+                raise ValueError("Only the team lead can remove members")
+            if member_id == team_lead_id:
+                raise ValueError("Team lead cannot remove themselves")
+            conn.execute(
+                "DELETE FROM team_members WHERE team_id = ? AND user_id = ?",
+                (team_id, member_id),
+            )
+            conn.execute(
+                "UPDATE users SET team_id = NULL WHERE id = ? AND team_id = ?",
+                (member_id, team_id),
+            )
+            conn.commit()
+        return True

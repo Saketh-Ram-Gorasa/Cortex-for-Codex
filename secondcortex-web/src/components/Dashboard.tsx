@@ -2,10 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import SummaryWidget from '@/components/team/SummaryWidget';
-import TeamDashboard from '@/components/team/TeamDashboard';
 import PMGuestDashboard from '@/components/PMGuestDashboard';
-import ProjectManager from '@/components/ProjectManager';
-import ProjectSelector from '@/components/ProjectSelector';
 
 interface DashboardProps {
     token: string;
@@ -14,20 +11,13 @@ interface DashboardProps {
     isGuestPm?: boolean;
     isGuestDeveloper?: boolean;
     selectedProjectId: string | null;
-    onSelectedProjectChange: (projectId: string | null) => void;
+    selectedProjectName?: string | null;
 }
 
 interface Stats {
     totalSnapshots: number;
     lastSnapshotTime: string | null;
     activeProject: string;
-}
-
-interface TeamInfo {
-    id: string;
-    name: string;
-    team_lead_id: string;
-    member_count: number;
 }
 
 function getUserIdFromToken(token: string): string | null {
@@ -57,27 +47,13 @@ export default function Dashboard({
     isGuestPm = false,
     isGuestDeveloper = false,
     selectedProjectId,
-    onSelectedProjectChange,
+    selectedProjectName,
 }: DashboardProps) {
     if (mode === 'pm') {
         return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
     }
 
     const userId = getUserIdFromToken(token);
-    const [showProjectManager, setShowProjectManager] = useState(false);
-    const [showTeamModal, setShowTeamModal] = useState(false);
-    const [showTeamDashboard, setShowTeamDashboard] = useState(false);
-    const [teams, setTeams] = useState<TeamInfo[]>([]);
-    const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-    const [teamAction, setTeamAction] = useState<'create' | 'join'>('create');
-    const [teamNameInput, setTeamNameInput] = useState('');
-    const [joinCodeInput, setJoinCodeInput] = useState('');
-    const [generatedInviteCode, setGeneratedInviteCode] = useState('');
-    const [teamActionError, setTeamActionError] = useState<string | null>(null);
-    const [teamActionNotice, setTeamActionNotice] = useState<string | null>(null);
-    const [teamLoading, setTeamLoading] = useState(false);
-    const [projectRefreshKey, setProjectRefreshKey] = useState(0);
-    const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
@@ -120,134 +96,6 @@ export default function Dashboard({
         return () => window.clearInterval(intervalId);
     }, [fetchStats]);
 
-    const fetchMyTeams = useCallback(async () => {
-        setTeamLoading(true);
-        setTeamActionError(null);
-        try {
-            const res = await fetch(`${backendUrl}/api/v1/teams/mine`, {
-                headers: { Authorization: `Bearer ${token}` },
-            });
-            if (!res.ok) {
-                throw new Error(`Failed to load teams (${res.status})`);
-            }
-
-            const data = (await res.json()) as TeamInfo[];
-            setTeams(Array.isArray(data) ? data : []);
-            setSelectedTeamId((prev) => {
-                if (prev && data.some((team) => team.id === prev)) {
-                    return prev;
-                }
-                return data.length > 0 ? data[0].id : null;
-            });
-        } catch (err) {
-            setTeamActionError(err instanceof Error ? err.message : 'Failed to fetch teams');
-        } finally {
-            setTeamLoading(false);
-        }
-    }, [backendUrl, token]);
-
-    const openTeamsModal = useCallback(async () => {
-        setShowTeamModal(true);
-        setTeamAction('create');
-        setTeamActionError(null);
-        setTeamActionNotice(null);
-        setGeneratedInviteCode('');
-        await fetchMyTeams();
-    }, [fetchMyTeams]);
-
-    const handleCreateTeam = useCallback(async () => {
-        const trimmedName = teamNameInput.trim();
-        if (!trimmedName) {
-            setTeamActionError('Enter a team name first.');
-            return;
-        }
-
-        setTeamLoading(true);
-        setTeamActionError(null);
-        setTeamActionNotice(null);
-        try {
-            const res = await fetch(`${backendUrl}/api/v1/teams`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify({ name: trimmedName }),
-            });
-
-            const payload = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(payload.detail || 'Failed to create team');
-            }
-
-            setGeneratedInviteCode(String(payload.invite_code || ''));
-            setTeamActionNotice('Team created successfully. Share the invite code with teammates.');
-            setTeamNameInput('');
-            await fetchMyTeams();
-            if (payload.team_id) {
-                setSelectedTeamId(String(payload.team_id));
-            }
-        } catch (err) {
-            setTeamActionError(err instanceof Error ? err.message : 'Failed to create team');
-        } finally {
-            setTeamLoading(false);
-        }
-    }, [backendUrl, token, teamNameInput, fetchMyTeams]);
-
-    const handleJoinTeam = useCallback(async () => {
-        const trimmedCode = joinCodeInput.trim();
-        if (!trimmedCode) {
-            setTeamActionError('Enter an invite code first.');
-            return;
-        }
-
-        setTeamLoading(true);
-        setTeamActionError(null);
-        setTeamActionNotice(null);
-        try {
-            const res = await fetch(`${backendUrl}/api/v1/teams/join`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify({ invite_code: trimmedCode }),
-            });
-            const payload = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(payload.detail || 'Failed to join team');
-            }
-
-            setJoinCodeInput('');
-            setTeamActionNotice(`Joined team ${payload.name || ''}`.trim());
-            await fetchMyTeams();
-            if (payload.team_id) {
-                setSelectedTeamId(String(payload.team_id));
-            }
-        } catch (err) {
-            setTeamActionError(err instanceof Error ? err.message : 'Failed to join team');
-        } finally {
-            setTeamLoading(false);
-        }
-    }, [backendUrl, token, joinCodeInput, fetchMyTeams]);
-
-    const selectedTeam = teams.find((team) => team.id === selectedTeamId) || null;
-
-    if (showTeamDashboard && selectedTeam) {
-        return (
-            <TeamDashboard
-                teamId={selectedTeam.id}
-                token={token}
-                backendUrl={backendUrl}
-                teams={teams}
-                onTeamChange={setSelectedTeamId}
-                onClose={() => {
-                    setShowTeamDashboard(false);
-                }}
-            />
-        );
-    }
-
     return (
         <div className="sc-dashboard-wrap">
             <div className="sc-dashboard-inner">
@@ -256,165 +104,7 @@ export default function Dashboard({
                     <h1 className="section-title">Developer Dashboard</h1>
                     <p className="section-desc">View your SecondCortex memory system stats and activity summaries.</p>
                     {isGuestDeveloper && <p className="pm-mode-chip">Guest Session: Suhaan</p>}
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
-                        <ProjectSelector
-                            token={token}
-                            backendUrl={backendUrl}
-                            selectedProjectId={selectedProjectId}
-                            onChange={onSelectedProjectChange}
-                            refreshKey={projectRefreshKey}
-                            onSelectedNameChange={setSelectedProjectName}
-                        />
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => setShowProjectManager(true)}
-                        >
-                            My Projects
-                        </button>
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={openTeamsModal}
-                        >
-                            Teams
-                        </button>
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={async () => {
-                                await fetchMyTeams();
-                                setShowTeamDashboard(true);
-                            }}
-                        >
-                            My Teams
-                        </button>
-                    </div>
                 </div>
-
-                {showProjectManager && (
-                    <ProjectManager
-                        token={token}
-                        backendUrl={backendUrl}
-                        onClose={() => setShowProjectManager(false)}
-                        onProjectsChanged={() => {
-                            fetchStats();
-                            setProjectRefreshKey((value) => value + 1);
-                        }}
-                    />
-                )}
-
-                {showTeamModal && (
-                    <div className="sc-modal-wrap">
-                        <div className="sc-modal-backdrop" onClick={() => setShowTeamModal(false)} />
-                        <div className="sc-modal-card">
-                            <div className="sc-modal-stack">
-                                <div className="sc-modal-head">
-                                    <div className="sc-modal-emoji">Team</div>
-                                    <h3 className="sc-modal-title">Team Space</h3>
-                                    <p className="sc-modal-sub">Create a team or join with an invite code.</p>
-                                </div>
-
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                    <button
-                                        type="button"
-                                        className="btn-secondary"
-                                        onClick={() => {
-                                            setTeamAction('create');
-                                            setTeamActionError(null);
-                                            setTeamActionNotice(null);
-                                        }}
-                                    >
-                                        Create Team
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="btn-secondary"
-                                        onClick={() => {
-                                            setTeamAction('join');
-                                            setTeamActionError(null);
-                                            setTeamActionNotice(null);
-                                        }}
-                                    >
-                                        Join Team
-                                    </button>
-                                </div>
-
-                                {teamAction === 'create' ? (
-                                    <>
-                                        <input
-                                            type="text"
-                                            value={teamNameInput}
-                                            onChange={(e) => setTeamNameInput(e.target.value)}
-                                            placeholder="Team name"
-                                            className="sc-auth-input"
-                                        />
-                                        <button
-                                            type="button"
-                                            className="btn-primary"
-                                            onClick={handleCreateTeam}
-                                            disabled={teamLoading}
-                                        >
-                                            {teamLoading ? 'Creating...' : 'Create Team'}
-                                        </button>
-                                        {generatedInviteCode && (
-                                            <div className="sc-modal-key">
-                                                <span className="sc-modal-key-text">{generatedInviteCode}</span>
-                                                <button
-                                                    type="button"
-                                                    className="btn-secondary"
-                                                    onClick={() => navigator.clipboard.writeText(generatedInviteCode)}
-                                                >
-                                                    Copy Code
-                                                </button>
-                                            </div>
-                                        )}
-                                    </>
-                                ) : (
-                                    <>
-                                        <input
-                                            type="text"
-                                            value={joinCodeInput}
-                                            onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
-                                            placeholder="Invite code"
-                                            className="sc-auth-input"
-                                        />
-                                        <button
-                                            type="button"
-                                            className="btn-primary"
-                                            onClick={handleJoinTeam}
-                                            disabled={teamLoading}
-                                        >
-                                            {teamLoading ? 'Joining...' : 'Join Team'}
-                                        </button>
-                                    </>
-                                )}
-
-                                {teamActionError && <p className="sc-auth-error">{teamActionError}</p>}
-                                {teamActionNotice && <p className="sc-auth-sub">{teamActionNotice}</p>}
-
-                                <div className="sc-modal-warn">
-                                    <span>My Teams</span>
-                                    <p>
-                                        {teams.length > 0
-                                            ? teams.map((team) => `${team.name} (${team.member_count})`).join(', ')
-                                            : 'No teams yet.'}
-                                    </p>
-                                </div>
-
-                                <button
-                                    onClick={() => {
-                                        setShowTeamModal(false);
-                                        setGeneratedInviteCode('');
-                                    }}
-                                    className="btn-primary sc-modal-close"
-                                >
-                                    Done
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 <div className="sc-stats-grid">
                     <StatCard 
