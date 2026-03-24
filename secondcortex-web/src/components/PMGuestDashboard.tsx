@@ -26,6 +26,33 @@ interface ProjectSnapshot {
   terminal_commands: string[];
 }
 
+interface TeamInfo {
+  id: string;
+  name: string;
+  team_lead_id: string;
+  member_count: number;
+}
+
+interface EvolutionEntry {
+  id: string;
+  title: string;
+  summary: string;
+  timestamp: number;
+  snapshot_count: number;
+  member_names: string[];
+  tag: 'daily' | 'feature';
+}
+
+interface EvolutionResponse {
+  team_id: string;
+  project_id: string | null;
+  mode: 'daily' | 'feature';
+  snapshot_count: number;
+  member_count: number;
+  used_project_filter?: boolean;
+  entries: EvolutionEntry[];
+}
+
 interface ChatMessage {
   role: 'assistant' | 'user';
   text: string;
@@ -45,12 +72,29 @@ function fmtSnapshotLine(snapshot: ProjectSnapshot): string {
   }`;
 }
 
+function parseTokenPayload(token: string): Record<string, unknown> | null {
+  try {
+    const payloadBase64 = token.split('.')[1];
+    if (!payloadBase64) {
+      return null;
+    }
+    const base64 = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGuestDashboardProps) {
   const apiBase = backendUrl || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
 
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectSnapshots, setProjectSnapshots] = useState<ProjectSnapshot[]>([]);
+  const [evolutionEntries, setEvolutionEntries] = useState<EvolutionEntry[]>([]);
+  const [teamId, setTeamId] = useState<string | null>(null);
+  const [timelineMode, setTimelineMode] = useState<'daily' | 'feature'>('daily');
   const [projectSnapshotError, setProjectSnapshotError] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
@@ -61,7 +105,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      text: 'Welcome PM. Chat is connected to the integrated backend LLM. Ask about project progress, status, or any development questions.',
+      text: 'Welcome to Team Cortex. Ask about project evolution, delivery risk, or latest team outcomes.',
     },
   ]);
 
@@ -69,12 +113,42 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     let cancelled = false;
     let polling = false;
 
+    const resolveTeamId = async (): Promise<string | null> => {
+      const payload = parseTokenPayload(token);
+      const role = String(payload?.role || 'user');
+      const tokenTeamId = String(payload?.team_id || '').trim();
+
+      if (role === 'pm_guest' && tokenTeamId) {
+        return tokenTeamId;
+      }
+
+      const teamsRes = await fetch(`${apiBase}/api/v1/teams/mine`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!teamsRes.ok) {
+        return tokenTeamId || null;
+      }
+
+      const teams = (await teamsRes.json()) as TeamInfo[];
+      if (!Array.isArray(teams) || teams.length === 0) {
+        return tokenTeamId || null;
+      }
+
+      return teams[0].id;
+    };
+
     const loadData = async (background: boolean) => {
       if (!background) {
         setLoading(true);
         setError(null);
       }
       try {
+        const resolvedTeamId = await resolveTeamId();
+        if (!cancelled) {
+          setTeamId(resolvedTeamId);
+        }
+
         // Fetch projects list
         const projectsRes = await fetch(`${apiBase}/api/v1/projects`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -96,8 +170,8 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
           setSelectedProjectId(projectList[0].id);
         }
 
-        // Fetch snapshots for selected project
-        if (selectedProjectId && projectList.some(p => p.id === selectedProjectId)) {
+        // Fetch snapshots + compressed evolution for selected project
+        if (selectedProjectId && projectList.some((p) => p.id === selectedProjectId)) {
           try {
             const snapshotsRes = await fetch(
               `${apiBase}/api/v1/snapshots/timeline?projectId=${encodeURIComponent(selectedProjectId)}&limit=1000`,
@@ -123,6 +197,31 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
             setProjectSnapshotError(msg);
             setProjectSnapshots([]);
           }
+
+          try {
+            if (resolvedTeamId) {
+              const evolutionRes = await fetch(
+                `${apiBase}/api/v1/summaries/team/${encodeURIComponent(resolvedTeamId)}/evolution?mode=${timelineMode}&projectId=${encodeURIComponent(selectedProjectId)}&limit=120`,
+                {
+                  headers: { Authorization: `Bearer ${token}` },
+                },
+              );
+
+              if (evolutionRes.ok) {
+                const evolutionData = (await evolutionRes.json()) as EvolutionResponse;
+                setEvolutionEntries(Array.isArray(evolutionData.entries) ? evolutionData.entries : []);
+              } else {
+                setEvolutionEntries([]);
+              }
+            } else {
+              setEvolutionEntries([]);
+            }
+          } catch {
+            setEvolutionEntries([]);
+          }
+        } else {
+          setProjectSnapshots([]);
+          setEvolutionEntries([]);
         }
 
         if (!cancelled) {
@@ -155,7 +254,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [apiBase, token, selectedProjectId]);
+  }, [apiBase, token, selectedProjectId, timelineMode]);
 
   const sendQuestion = async (input: string) => {
     const trimmed = input.trim();
@@ -169,14 +268,18 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
 
     try {
       const selectedProject = projects.find((p) => p.id === selectedProjectId);
+      const topTimeline = evolutionEntries.slice(0, 12);
       const projectContext = selectedProject
         ? [
             `Selected project: ${selectedProject.name}`,
             `Project visibility: ${selectedProject.visibility || 'private'}`,
             `Project status: ${selectedProject.is_archived ? 'archived' : 'active'}`,
             `Total snapshots tracked: ${projectSnapshots.length}`,
+        `Timeline mode: ${timelineMode}`,
             `Recent Project Activity (last 20 snapshots):`,
             ...(projectSnapshots.slice(0, 20).map((snapshot) => `- ${fmtSnapshotLine(snapshot)}`) || []),
+        `Compressed Team Evolution (latest first):`,
+        ...(topTimeline.map((entry) => `- [${new Date(toEpochMs(entry.timestamp)).toLocaleString()}] ${entry.title} | ${entry.summary}`) || []),
             `Project Evolution Summary:`,
             getProjectEvolutionSummary(),
           ].join('\n')
@@ -279,12 +382,12 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     <div className="sc-dashboard-wrap">
       <div className="sc-dashboard-inner">
         <div className="sc-section-header pm-header">
-          <p className="section-label">PM Control Surface</p>
-          <h1 className="section-title pm-title">Project Manager Dashboard</h1>
+          <p className="section-label">Team Cortex Control Surface</p>
+          <h1 className="section-title pm-title">Team Cortex</h1>
           <p className="section-desc">
-            Manage projects and track their evolution. View project snapshots, analyze progress, and chat with AI for project insights.
+            Track project evolution using compressed timeline summaries, then query the assistant for deeper analysis.
           </p>
-          <p className="pm-mode-chip">{isGuestPm ? 'Guest PM Session' : 'Authenticated PM Session'}</p>
+          <p className="pm-mode-chip">{isGuestPm ? 'Team Cortex Guest Session' : 'Team Cortex Authenticated Session'}</p>
         </div>
 
         <div className="sc-stats-grid">
@@ -292,8 +395,8 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
           <StatCard title="Project Snapshots" value={String(projectSnapshots.length)} subtitle="Evolution history available" />
           <StatCard
             title="Evolution Status"
-            value={projectSnapshots.length > 0 ? 'Tracking' : 'Pending'}
-            subtitle={selectedProjectId ? `Selected: ${projects.find(p => p.id === selectedProjectId)?.name || 'Unknown'}` : 'Select a project'}
+            value={evolutionEntries.length > 0 ? 'Tracking' : 'Pending'}
+            subtitle={selectedProjectId ? `Selected: ${projects.find((p) => p.id === selectedProjectId)?.name || 'Unknown'}` : 'Select a project'}
           />
         </div>
 
@@ -314,7 +417,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         )}
 
         {!loading && (
-          <div className="pm-grid" style={{ display: 'grid', gridTemplateColumns: '25% 1fr', gap: '16px', marginTop: '20px' }}>
+          <div className="pm-grid" style={{ marginTop: '20px' }}>
             {/* LEFT PANEL: Project List */}
             <section className="pm-panel">
               <p className="pm-panel-kicker">Portfolio</p>
@@ -339,82 +442,99 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
               </div>
             </section>
 
-            {/* RIGHT SIDE: 2-row layout (evolution + chat) */}
-            <div style={{ display: 'grid', gridTemplateRows: '1fr 1fr', gap: '16px' }}>
-              {/* RIGHT-TOP: Project Evolution */}
-              <section className="pm-panel">
-                <p className="pm-panel-kicker">Evolution</p>
-                <h2 className="pm-panel-title">Project Progress</h2>
-                <div className="pm-history">
-                  {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
-                  {projectSnapshots.length === 0 && !projectSnapshotError && (
-                    <p className="pm-history-summary">No snapshots for this project yet.</p>
-                  )}
-                  {projectSnapshots.length > 0 && (
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '12px', color: '#666', padding: '8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
-                      {getProjectEvolutionSummary()}
+            {/* MIDDLE: Timeline Evolution */}
+            <section className="pm-panel">
+              <p className="pm-panel-kicker">Timeline Evolution</p>
+              <h2 className="pm-panel-title">Compressed Project Evolution</h2>
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ opacity: timelineMode === 'daily' ? 1 : 0.75 }}
+                  onClick={() => setTimelineMode('daily')}
+                >
+                  Daily
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ opacity: timelineMode === 'feature' ? 1 : 0.75 }}
+                  onClick={() => setTimelineMode('feature')}
+                >
+                  Feature
+                </button>
+              </div>
+
+              <div className="pm-history" style={{ maxHeight: 470 }}>
+                {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
+                {teamId === null && <p className="pm-history-summary">Join or create a team to view team evolution.</p>}
+                {teamId !== null && evolutionEntries.length === 0 && !projectSnapshotError && (
+                  <p className="pm-history-summary">No compressed timeline entries are available for this project yet.</p>
+                )}
+
+                {evolutionEntries.map((entry) => (
+                  <article key={entry.id} className="pm-history-item">
+                    <div className="pm-history-head">
+                      <span>{new Date(toEpochMs(entry.timestamp)).toLocaleString()}</span>
+                      <span>{entry.tag.toUpperCase()}</span>
                     </div>
-                  )}
-                  <div style={{ marginTop: '12px', maxHeight: '200px', overflowY: 'auto' }}>
-                    {projectSnapshots.slice(0, 5).map((snapshot) => (
-                      <article key={snapshot.id} className="pm-history-item">
-                        <div className="pm-history-head">
-                          <span>{new Date(toEpochMs(snapshot.timestamp)).toLocaleString()}</span>
-                          <span>{snapshot.git_branch || 'no-branch'}</span>
-                        </div>
-                        <div className="pm-history-file">{snapshot.active_file || 'Unknown file'}</div>
-                        <p className="pm-history-summary">{snapshot.summary || 'No summary for this snapshot.'}</p>
-                      </article>
-                    ))}
+                    <div className="pm-history-file">{entry.title}</div>
+                    <p className="pm-history-summary" style={{ whiteSpace: 'pre-line' }}>
+                      {entry.summary || 'No summary available for this timeline bucket.'}
+                    </p>
+                    <p className="pm-history-summary" style={{ marginTop: 8 }}>
+                      Contributors: {entry.member_names.join(', ') || 'Unknown'} | Snapshots: {entry.snapshot_count}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            {/* RIGHT: Chatbot */}
+            <section className="pm-panel">
+              <p className="pm-panel-kicker">Assistant</p>
+              <h2 className="pm-panel-title">Team Cortex Chat</h2>
+              <p className="pm-chat-sub">Query any project detail, timeline shift, risk signal, or delivery status.</p>
+
+              <div className="pm-chat-quick">
+                <button type="button" onClick={() => sendQuestion('Where are the current delivery risks based on the latest Team Cortex timeline?')}>
+                  Risk windows
+                </button>
+                <button type="button" onClick={() => sendQuestion('What trend do you see in recent timeline outcomes?')}>
+                  Outcome trend
+                </button>
+                <button type="button" onClick={() => sendQuestion('What should be the next actions for this project?')}>
+                  Next actions
+                </button>
+              </div>
+
+              <div className="pm-chat-log" style={{ marginBottom: '12px' }}>
+                {messages.map((message, index) => (
+                  <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
+                    {message.text}
                   </div>
-                </div>
-              </section>
+                ))}
+              </div>
 
-              {/* RIGHT-BOTTOM: Chatbot */}
-              <section className="pm-panel">
-                <p className="pm-panel-kicker">Assistant</p>
-                <h2 className="pm-panel-title">Project Insights</h2>
-                <p className="pm-chat-sub">Ask about project progress and evolution.</p>
-
-                <div className="pm-chat-quick">
-                  <button type="button" onClick={() => sendQuestion('What is the current project status based on recent activity?')}>
-                    Project status
-                  </button>
-                  <button type="button" onClick={() => sendQuestion('What are the key files and technologies in use?')}>
-                    Tech stack
-                  </button>
-                  <button type="button" onClick={() => sendQuestion('Summarize the project progress.')}>
-                    Progress
-                  </button>
-                </div>
-
-                <div className="pm-chat-log" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '12px' }}>
-                  {messages.map((message, index) => (
-                    <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
-                      {message.text}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="pm-chat-input-wrap">
-                  <input
-                    className="query-input"
-                    type="text"
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        void sendQuestion(question);
-                      }
-                    }}
-                    placeholder="Ask about project"
-                  />
-                  <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
-                    {chatPending ? 'Asking...' : 'Ask'}
-                  </button>
-                </div>
-              </section>
-            </div>
+              <div className="pm-chat-input-wrap">
+                <input
+                  className="query-input"
+                  type="text"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      void sendQuestion(question);
+                    }
+                  }}
+                  placeholder="Ask Team Cortex"
+                />
+                <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
+                  {chatPending ? 'Asking...' : 'Ask'}
+                </button>
+              </div>
+            </section>
           </div>
         )}
       </div>
