@@ -22,7 +22,7 @@ export default function LandingPage() {
   const githubRepoUrl = "https://github.com/Syed-Suhaan/SecondCortex-Labs";
   const mainNavLinks = [
     { label: "Live Graph", href: "/live" },
-    { label: "PM Dashboard", href: "/?pm=true" },
+    { label: "Team Cortex", href: "/?pm=true" },
     { label: "Testing", href: "/testing" },
     { label: "Architecture", href: "#arch" },
   ];
@@ -33,8 +33,8 @@ export default function LandingPage() {
       href: "/live",
     },
     {
-      title: "PM Dashboard",
-      description: "Track team progress and summaries from a manager view.",
+      title: "Team Cortex",
+      description: "Track team progress and timeline summaries from the manager surface.",
       href: "/?pm=true",
     },
     {
@@ -506,7 +506,7 @@ export default function LandingPage() {
               setShowPmModal(true);
             }}
           >
-            PM
+            Team Cortex
           </button>
           <a className="nav-login" href="/login">
             Login
@@ -1064,7 +1064,7 @@ export default function LandingPage() {
             <a href="/login">Login</a>
             <a href="/signup">Sign Up</a>
             <a href="/live">Live Graph</a>
-            <a href="/?pm=true">PM Dashboard</a>
+            <a href="/?pm=true">Team Cortex</a>
             <a href="/testing">Testing</a>
           </div>
         </div>
