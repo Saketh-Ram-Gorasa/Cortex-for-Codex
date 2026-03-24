@@ -16,6 +16,7 @@ export default function LandingPage() {
   const [pmPassword, setPmPassword] = useState("");
   const [pmError, setPmError] = useState("");
   const [isPmSubmitting, setIsPmSubmitting] = useState(false);
+  const [queryLoading, setQueryLoading] = useState(false);
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://sc-backend-suhaan.azurewebsites.net";
   const extensionMarketplaceUrl = "https://marketplace.visualstudio.com/items?itemName=secondcortex-labs.secondcortex";
   const githubRepoUrl = "https://github.com/Syed-Suhaan/SecondCortex-Labs";
@@ -139,8 +140,9 @@ export default function LandingPage() {
     const queryInput = document.getElementById("query-input") as HTMLInputElement | null;
     const resultText = document.getElementById("result-text");
     const resultLabel = document.querySelector(".result-label");
+    const queryResult = document.getElementById("query-result");
 
-    if (!canvas || !tb || !queryBtn || !queryInput || !resultText || !resultLabel) {
+    if (!canvas || !tb || !queryBtn || !queryInput || !resultText || !resultLabel || !queryResult) {
       return;
     }
 
@@ -365,25 +367,44 @@ export default function LandingPage() {
       timers.push(timerId);
     };
 
+    let isQueryLoading = false;
+    const setQueryLoadingState = (isLoading: boolean) => {
+      isQueryLoading = isLoading;
+      setQueryLoading(isLoading);
+      queryResult.classList.toggle("loading", isLoading);
+    };
+
     const fireQuery = (q: string) => {
-      const match = queryMap[q.toLowerCase().trim()];
-      if (match) {
-        memEntries.forEach((e) => {
-          e.classList.remove("active");
-          if (e.dataset.file === match) {
-            e.classList.add("active");
-          }
-        });
-        const response = responses[match];
-        if (response) {
-          setResult(response.label, response.text);
-        }
-      } else {
-        setResult(
-          "Retriever - Semantic Search",
-          `Searching vector store for: "${q}"\n\nRunning cosine similarity search across ${Math.floor(Math.random() * 800) + 200} stored snapshots...\n\nTop result: similarity score 0.${Math.floor(Math.random() * 15) + 80} - context match found in active workspace history.`,
-        );
+      const normalized = q.toLowerCase().trim();
+      if (!normalized || isQueryLoading) {
+        return;
       }
+
+      setQueryLoadingState(true);
+      setResult("Retriever - Searching…", `Searching vector store for: "${q}"\n\nRunning semantic retrieval…`);
+
+      const timerId = window.setTimeout(() => {
+        const match = queryMap[normalized];
+        if (match) {
+          memEntries.forEach((e) => {
+            e.classList.remove("active");
+            if (e.dataset.file === match) {
+              e.classList.add("active");
+            }
+          });
+          const response = responses[match];
+          if (response) {
+            setResult(response.label, response.text);
+          }
+        } else {
+          setResult(
+            "Retriever - Semantic Search",
+            `Searching vector store for: "${q}"\n\nRunning cosine similarity search across ${Math.floor(Math.random() * 800) + 200} stored snapshots…\n\nTop result: similarity score 0.${Math.floor(Math.random() * 15) + 80} - context match found in active workspace history.`,
+          );
+        }
+        setQueryLoadingState(false);
+      }, 600);
+      timers.push(timerId);
     };
 
     const memHandlers: Array<{ el: HTMLElement; fn: EventListener }> = [];
@@ -815,8 +836,15 @@ export default function LandingPage() {
                 type="text"
                 placeholder="How does authentication work in this project?"
               />
-              <button className="query-btn" id="query-btn" type="button">
-                SEARCH
+              <button className={`query-btn ${queryLoading ? "is-loading" : ""}`} id="query-btn" type="button" disabled={queryLoading}>
+                {queryLoading ? (
+                  <>
+                    <span className="loading-ring" aria-hidden="true" />
+                    Searching…
+                  </>
+                ) : (
+                  "SEARCH"
+                )}
               </button>
             </div>
 
@@ -841,7 +869,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-            <div className="query-result" id="query-result">
+            <div className="query-result" id="query-result" aria-live="polite">
               <div className="result-label">Retriever - Awaiting Query</div>
               <div className="result-text" id="result-text">
                 Click any memory entry or type a query to see semantic retrieval in action.
@@ -1066,10 +1094,17 @@ export default function LandingPage() {
                 required
               />
 
-              {pmError && <div className="sc-auth-error">{pmError}</div>}
+              {pmError && <div className="sc-auth-error" aria-live="polite">{pmError}</div>}
 
               <button type="submit" disabled={isPmSubmitting} className="btn-primary sc-auth-submit">
-                {isPmSubmitting ? "Please wait..." : "Login as PM"}
+                {isPmSubmitting ? (
+                  <>
+                    <span className="loading-ring" aria-hidden="true" />
+                    Please wait…
+                  </>
+                ) : (
+                  "Login as PM"
+                )}
               </button>
 
               <button
@@ -1078,7 +1113,14 @@ export default function LandingPage() {
                 disabled={isPmSubmitting}
                 onClick={handlePmGuestLogin}
               >
-                {isPmSubmitting ? "Please wait..." : "Guest Login"}
+                {isPmSubmitting ? (
+                  <>
+                    <span className="loading-ring" aria-hidden="true" />
+                    Please wait…
+                  </>
+                ) : (
+                  "Guest Login"
+                )}
               </button>
             </form>
           </div>
