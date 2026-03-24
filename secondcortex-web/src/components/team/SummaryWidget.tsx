@@ -36,7 +36,7 @@ const SUMMARY_CACHE_TTL_MS = 2 * 60 * 1000;
 /**
  * Reusable summary widget that can be embedded in:
  * - Team Dashboard
- * - PM Dashboard (read-only access to teams)
+ * - Team Cortex dashboard (read-only access to teams)
  * - Individual Developer Dashboard (new summary section)
  */
 export default function SummaryWidget({

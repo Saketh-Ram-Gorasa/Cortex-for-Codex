@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-interface PMGuestDashboardProps {
+interface TeamCortexDashboardProps {
   token: string;
   isGuestPm: boolean;
   backendUrl?: string;
@@ -86,7 +86,7 @@ function parseTokenPayload(token: string): Record<string, unknown> | null {
   }
 }
 
-export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGuestDashboardProps) {
+export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: TeamCortexDashboardProps) {
   const apiBase = backendUrl || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
 
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -229,7 +229,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         }
       } catch (err) {
         if (!cancelled && !background) {
-          setError(err instanceof Error ? err.message : 'Failed to load PM dashboard data.');
+          setError(err instanceof Error ? err.message : 'Failed to load Team Cortex dashboard data.');
           setLoading(false);
         }
       }

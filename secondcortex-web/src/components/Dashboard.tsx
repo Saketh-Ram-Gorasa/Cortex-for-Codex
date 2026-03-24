@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import SummaryWidget from '@/components/team/SummaryWidget';
-import PMGuestDashboard from '@/components/PMGuestDashboard';
+import TeamCortexDashboard from '@/components/TeamCortexDashboard';
 
 interface DashboardProps {
     token: string;
@@ -106,7 +106,7 @@ export default function Dashboard({
     }, [fetchStats, mode]);
 
     if (mode === 'pm') {
-        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
+        return <TeamCortexDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
     }
 
     return (
