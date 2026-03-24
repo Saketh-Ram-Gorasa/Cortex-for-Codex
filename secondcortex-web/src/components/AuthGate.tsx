@@ -378,7 +378,7 @@ export default function AuthGate() {
       <div className="sc-app-topbar">
         <div className="nav-logo">
           Second<span>Cortex</span>
-          {sessionMode === 'pm' && <span className="sc-role-badge">PM</span>}
+          {sessionMode === 'pm' && <span className="sc-role-badge">Team Cortex</span>}
           {sessionMode === 'developer' && isDevGuest && <span className="sc-role-badge">Guest</span>}
         </div>
 

@@ -15,6 +15,12 @@ interface ProjectItem {
   is_archived: boolean;
 }
 
+interface TeamMember {
+  id: string;
+  email: string;
+  display_name: string;
+}
+
 interface ProjectSnapshot {
   id: string;
   user_id: string;
@@ -61,6 +67,22 @@ function summarizeFeatureName(activeFile: string): string {
   const clean = activeFile.replace(/\\/g, '/');
   const base = clean.split('/').pop() || clean;
   return base.replace(/\.[^.]+$/, '') || base;
+}
+
+function parseTeamIdFromToken(token: string): string | null {
+  try {
+    const payloadBase64 = token.split('.')[1];
+    if (!payloadBase64) {
+      return null;
+    }
+    const base64 = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded));
+    const teamId = String(payload.team_id || '').trim();
+    return teamId || null;
+  } catch {
+    return null;
+  }
 }
 
 function classifyOutcome(text: string): TimelineEvolutionEntry['outcome'] {
@@ -153,13 +175,79 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
           setSelectedProjectId(projectList[0].id);
         }
 
+        const effectiveProjectId = selectedProjectId || (projectList.length > 0 ? projectList[0].id : null);
+        const authHeaders = { Authorization: `Bearer ${token}` };
+
+        let mergedTeamSnapshots: ProjectSnapshot[] = [];
+
+        // Team Cortex should reflect both Saketh + Suhaan streams when available.
+        const teamIdFromToken = parseTeamIdFromToken(token);
+        if (teamIdFromToken) {
+          const membersRes = await fetch(`${apiBase}/api/v1/teams/${teamIdFromToken}/members`, {
+            headers: authHeaders,
+          });
+
+          if (membersRes.ok) {
+            const members = ((await membersRes.json()) as TeamMember[]) || [];
+            const preferredMembers = members.filter((member) => {
+              const email = String(member.email || '');
+              const displayName = String(member.display_name || '');
+              return /sak|suh/i.test(email) || /sak|suh/i.test(displayName);
+            });
+
+            const targetMembers = preferredMembers.length >= 2 ? preferredMembers : members;
+
+            const projectQuery = effectiveProjectId ? `&projectId=${encodeURIComponent(effectiveProjectId)}` : '';
+            const memberSnapshotEntries = await Promise.all(
+              targetMembers.map(async (member) => {
+                const res = await fetch(
+                  `${apiBase}/api/v1/teams/${teamIdFromToken}/members/${member.id}/snapshots?limit=1000${projectQuery}`,
+                  { headers: authHeaders },
+                );
+                if (!res.ok) {
+                  return [] as ProjectSnapshot[];
+                }
+                const rows = (await res.json()) as ProjectSnapshot[];
+                return Array.isArray(rows) ? rows : [];
+              }),
+            );
+
+            mergedTeamSnapshots = memberSnapshotEntries.flat();
+
+            // If project-scoped rows are empty, fallback to latest member snapshots without project filter.
+            if (mergedTeamSnapshots.length === 0 && effectiveProjectId) {
+              const fallbackEntries = await Promise.all(
+                targetMembers.map(async (member) => {
+                  const res = await fetch(
+                    `${apiBase}/api/v1/teams/${teamIdFromToken}/members/${member.id}/snapshots?limit=1000`,
+                    { headers: authHeaders },
+                  );
+                  if (!res.ok) {
+                    return [] as ProjectSnapshot[];
+                  }
+                  const rows = (await res.json()) as ProjectSnapshot[];
+                  return Array.isArray(rows) ? rows : [];
+                }),
+              );
+              mergedTeamSnapshots = fallbackEntries.flat();
+            }
+
+            const dedupedById = new Map<string, ProjectSnapshot>();
+            for (const row of mergedTeamSnapshots) {
+              const key = String(row.id || `${row.user_id}:${row.timestamp}:${row.active_file}`);
+              dedupedById.set(key, row);
+            }
+            mergedTeamSnapshots = Array.from(dedupedById.values()).sort((a, b) => toEpochMs(b.timestamp) - toEpochMs(a.timestamp));
+          }
+        }
+
         // Fetch snapshots for selected project
-        if (selectedProjectId && projectList.some((project) => project.id === selectedProjectId)) {
+        if (effectiveProjectId && projectList.some((project) => project.id === effectiveProjectId)) {
           try {
             const snapshotsRes = await fetch(
-              `${apiBase}/api/v1/snapshots/timeline?projectId=${encodeURIComponent(selectedProjectId)}&limit=1000`,
+              `${apiBase}/api/v1/snapshots/timeline?projectId=${encodeURIComponent(effectiveProjectId)}&limit=1000`,
               {
-                headers: { Authorization: `Bearer ${token}` },
+                headers: authHeaders,
               },
             );
             if (!snapshotsRes.ok) {
@@ -172,7 +260,9 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
               setProjectSnapshots([]);
             } else {
               const timelineData = (await snapshotsRes.json()) as { timeline: ProjectSnapshot[] };
-              setProjectSnapshots(timelineData.timeline || []);
+              const timelineRows = timelineData.timeline || [];
+              const snapshotsToRender = mergedTeamSnapshots.length > 0 ? mergedTeamSnapshots : timelineRows;
+              setProjectSnapshots(snapshotsToRender);
               setProjectSnapshotError('');
             }
           } catch (err) {
