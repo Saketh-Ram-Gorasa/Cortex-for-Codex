@@ -299,7 +299,6 @@ async def pm_guest_login():
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no team is configured.")
 
     resolved_team_id: str | None = None
-    fallback_team_id: str | None = None
     for candidate in candidate_team_ids:
         team_info = user_db.get_team_info(candidate)
         if not team_info:
@@ -309,29 +308,8 @@ async def pm_guest_login():
         if not members:
             continue
 
-        # Keep a fallback in case snapshot stores are temporarily unavailable.
-        if fallback_team_id is None:
-            fallback_team_id = candidate
-
-        # Prefer teams where at least one member has synced snapshot history.
-        # Keep login path non-blocking by using local DB checks only.
-        has_snapshot_activity = False
-        for member in members:
-            member_id = str(member.get("id") or "").strip()
-            if not member_id:
-                continue
-
-            legacy_rows = user_db.get_user_snapshots(member_id, limit=1)
-            if legacy_rows:
-                has_snapshot_activity = True
-                break
-
-        if has_snapshot_activity:
-            resolved_team_id = candidate
-            break
-
-    if not resolved_team_id and fallback_team_id:
-        resolved_team_id = fallback_team_id
+        resolved_team_id = candidate
+        break
 
     if not resolved_team_id:
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")
