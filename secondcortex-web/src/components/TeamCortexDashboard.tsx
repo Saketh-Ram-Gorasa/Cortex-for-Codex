@@ -417,8 +417,8 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
         )}
 
         {!loading && (
-          <div className="pm-grid" style={{ marginTop: '20px' }}>
-            {/* LEFT PANEL: Project List */}
+          <div style={{ marginTop: '20px' }}>
+            {/* TOP: Project List - Full Width */}
             <section className="pm-panel">
               <p className="pm-panel-kicker">Portfolio</p>
               <h2 className="pm-panel-title">Projects</h2>
@@ -442,99 +442,125 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
               </div>
             </section>
 
-            {/* MIDDLE: Timeline Evolution */}
-            <section className="pm-panel">
-              <p className="pm-panel-kicker">Timeline Evolution</p>
-              <h2 className="pm-panel-title">Compressed Project Evolution</h2>
+            {/* BELOW: 2/3 Evolution + Snapshots (Left) | 1/3 Chatbot (Right) */}
+            <div className="pm-grid" style={{ marginTop: '20px', display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+              {/* LEFT: Timeline Evolution + Project Snapshots */}
+              <section className="pm-panel">
+                <p className="pm-panel-kicker">Timeline Evolution</p>
+                <h2 className="pm-panel-title">Compressed Project Evolution</h2>
 
-              <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  style={{ opacity: timelineMode === 'daily' ? 1 : 0.75 }}
-                  onClick={() => setTimelineMode('daily')}
-                >
-                  Daily
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  style={{ opacity: timelineMode === 'feature' ? 1 : 0.75 }}
-                  onClick={() => setTimelineMode('feature')}
-                >
-                  Feature
-                </button>
-              </div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ opacity: timelineMode === 'daily' ? 1 : 0.75 }}
+                    onClick={() => setTimelineMode('daily')}
+                  >
+                    Daily
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ opacity: timelineMode === 'feature' ? 1 : 0.75 }}
+                    onClick={() => setTimelineMode('feature')}
+                  >
+                    Feature
+                  </button>
+                </div>
 
-              <div className="pm-history" style={{ maxHeight: 470 }}>
-                {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
-                {teamId === null && <p className="pm-history-summary">Join or create a team to view team evolution.</p>}
-                {teamId !== null && evolutionEntries.length === 0 && !projectSnapshotError && (
-                  <p className="pm-history-summary">No compressed timeline entries are available for this project yet.</p>
-                )}
+                <div className="pm-history" style={{ maxHeight: 600, overflowY: 'auto' }}>
+                  {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
+                  {teamId === null && <p className="pm-history-summary">Join or create a team to view team evolution.</p>}
+                  
+                  {/* Compressed Evolution Entries */}
+                  {teamId !== null && evolutionEntries.length === 0 && !projectSnapshotError && projectSnapshots.length === 0 && (
+                    <p className="pm-history-summary">No compressed timeline entries are available for this project yet.</p>
+                  )}
 
-                {evolutionEntries.map((entry) => (
-                  <article key={entry.id} className="pm-history-item">
-                    <div className="pm-history-head">
-                      <span>{new Date(toEpochMs(entry.timestamp)).toLocaleString()}</span>
-                      <span>{entry.tag.toUpperCase()}</span>
+                  {evolutionEntries.map((entry) => (
+                    <article key={entry.id} className="pm-history-item">
+                      <div className="pm-history-head">
+                        <span>{new Date(toEpochMs(entry.timestamp)).toLocaleString()}</span>
+                        <span>{entry.tag.toUpperCase()}</span>
+                      </div>
+                      <div className="pm-history-file">{entry.title}</div>
+                      <p className="pm-history-summary" style={{ whiteSpace: 'pre-line' }}>
+                        {entry.summary || 'No summary available for this timeline bucket.'}
+                      </p>
+                      <p className="pm-history-summary" style={{ marginTop: 8 }}>
+                        Contributors: {entry.member_names.join(', ') || 'Unknown'} | Snapshots: {entry.snapshot_count}
+                      </p>
+                    </article>
+                  ))}
+
+                  {/* Project Snapshots */}
+                  {projectSnapshots.length > 0 && (
+                    <>
+                      <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #333' }}>
+                        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: 8, color: '#ccc' }}>Project Snapshots</h3>
+                      </div>
+                      {projectSnapshots.map((snapshot, idx) => (
+                        <article key={snapshot.id || idx} className="pm-history-item" style={{ marginTop: 8 }}>
+                          <div className="pm-history-head">
+                            <span>{new Date(toEpochMs(snapshot.timestamp)).toLocaleString()}</span>
+                            <span style={{ color: '#888' }}>{snapshot.git_branch || 'no-branch'}</span>
+                          </div>
+                          <div className="pm-history-file">{snapshot.active_file || 'unknown-file'}</div>
+                          <p className="pm-history-summary" style={{ marginTop: 4 }}>
+                            {snapshot.summary || 'No summary available'}
+                          </p>
+                        </article>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </section>
+
+              {/* RIGHT: Chatbot */}
+              <section className="pm-panel">
+                <p className="pm-panel-kicker">Assistant</p>
+                <h2 className="pm-panel-title">Team Cortex Chat</h2>
+                <p className="pm-chat-sub">Query any project detail, timeline shift, risk signal, or delivery status.</p>
+
+                <div className="pm-chat-quick">
+                  <button type="button" onClick={() => sendQuestion('Where are the current delivery risks based on the latest Team Cortex timeline?')}>
+                    Risk windows
+                  </button>
+                  <button type="button" onClick={() => sendQuestion('What trend do you see in recent timeline outcomes?')}>
+                    Outcome trend
+                  </button>
+                  <button type="button" onClick={() => sendQuestion('What should be the next actions for this project?')}>
+                    Next actions
+                  </button>
+                </div>
+
+                <div className="pm-chat-log" style={{ marginBottom: '12px', maxHeight: 450, overflowY: 'auto' }}>
+                  {messages.map((message, index) => (
+                    <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
+                      {message.text}
                     </div>
-                    <div className="pm-history-file">{entry.title}</div>
-                    <p className="pm-history-summary" style={{ whiteSpace: 'pre-line' }}>
-                      {entry.summary || 'No summary available for this timeline bucket.'}
-                    </p>
-                    <p className="pm-history-summary" style={{ marginTop: 8 }}>
-                      Contributors: {entry.member_names.join(', ') || 'Unknown'} | Snapshots: {entry.snapshot_count}
-                    </p>
-                  </article>
-                ))}
-              </div>
-            </section>
+                  ))}
+                </div>
 
-            {/* RIGHT: Chatbot */}
-            <section className="pm-panel">
-              <p className="pm-panel-kicker">Assistant</p>
-              <h2 className="pm-panel-title">Team Cortex Chat</h2>
-              <p className="pm-chat-sub">Query any project detail, timeline shift, risk signal, or delivery status.</p>
-
-              <div className="pm-chat-quick">
-                <button type="button" onClick={() => sendQuestion('Where are the current delivery risks based on the latest Team Cortex timeline?')}>
-                  Risk windows
-                </button>
-                <button type="button" onClick={() => sendQuestion('What trend do you see in recent timeline outcomes?')}>
-                  Outcome trend
-                </button>
-                <button type="button" onClick={() => sendQuestion('What should be the next actions for this project?')}>
-                  Next actions
-                </button>
-              </div>
-
-              <div className="pm-chat-log" style={{ marginBottom: '12px' }}>
-                {messages.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
-                    {message.text}
-                  </div>
-                ))}
-              </div>
-
-              <div className="pm-chat-input-wrap">
-                <input
-                  className="query-input"
-                  type="text"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      void sendQuestion(question);
-                    }
-                  }}
-                  placeholder="Ask Team Cortex"
-                />
-                <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
-                  {chatPending ? 'Asking...' : 'Ask'}
-                </button>
-              </div>
-            </section>
+                <div className="pm-chat-input-wrap">
+                  <input
+                    className="query-input"
+                    type="text"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        void sendQuestion(question);
+                      }
+                    }}
+                    placeholder="Ask Team Cortex"
+                  />
+                  <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
+                    {chatPending ? 'Asking...' : 'Ask'}
+                  </button>
+                </div>
+              </section>
+            </div>
           </div>
         )}
       </div>
