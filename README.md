@@ -122,6 +122,13 @@ LLM_RATE_LIMIT_MAX_RETRIES=2
 # JWT
 JWT_SECRET=change_me
 
+# Azure AI Document Intelligence (optional external document ingestion)
+AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://<resource>.cognitiveservices.azure.com/
+AZURE_DOCUMENT_INTELLIGENCE_KEY=<document-intelligence-key>
+AZURE_DOCUMENT_INTELLIGENCE_MODEL_ID=prebuilt-read
+MCP_EXTERNAL_INGESTION_ENABLED=true
+MCP_EXTERNAL_DOCUMENT_ENABLED=false
+
 # Storage
 CHROMA_DB_PATH=./chroma_db
 

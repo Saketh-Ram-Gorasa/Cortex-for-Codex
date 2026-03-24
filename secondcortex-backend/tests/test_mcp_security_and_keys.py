@@ -414,6 +414,88 @@ def test_ingest_slack_thread_persists_record(monkeypatch):
     assert captured["record"].source_type == "slack"
 
 
+def test_ingest_document_respects_feature_flags(monkeypatch):
+    class _FakeUserDB:
+        def get_user_by_mcp_api_key(self, api_key: str):
+            if api_key == "doc-key":
+                return {"id": "u1", "display_name": "User 1", "scopes": ["memory:read"]}
+            return None
+
+    monkeypatch.setenv("SECONDCORTEX_MCP_API_KEY", "doc-key")
+    monkeypatch.setattr(mcp_server, "user_db", _FakeUserDB())
+    monkeypatch.setattr(mcp_server.settings, "mcp_external_ingestion_enabled", True)
+    monkeypatch.setattr(mcp_server.settings, "mcp_external_document_enabled", False)
+    mcp_server._rate_limiter._calls.clear()
+
+    out = asyncio.run(
+        mcp_server.ingest_document(
+            filename="design.pdf",
+            content_base64="SGVsbG8=",
+            domain="architecture",
+            api_key=None,
+        )
+    )
+
+    assert "Document ingestion is disabled" in out
+
+
+def test_ingest_document_persists_record(monkeypatch):
+    class _FakeUserDB:
+        def get_user_by_mcp_api_key(self, api_key: str):
+            if api_key == "doc-key-ok":
+                return {"id": "u1", "display_name": "User 1", "scopes": ["memory:read"]}
+            return None
+
+    class _FakeDocService:
+        def __init__(self, endpoint: str, api_key: str, model_id: str):
+            self.endpoint = endpoint
+            self.api_key = api_key
+            self.model_id = model_id
+
+        def extract_text_from_bytes(self, content: bytes, mime_type: str | None = None):
+            return {
+                "text": "Auth fallback and retry strategy",
+                "pages": 1,
+                "language": "en",
+                "confidence": 0.88,
+                "warnings": [],
+            }
+
+    captured = {"record": None, "user_id": None}
+
+    async def fake_upsert_external_record(record, user_id=None):
+        captured["record"] = record
+        captured["user_id"] = user_id
+        return "document:abc123"
+
+    monkeypatch.setenv("SECONDCORTEX_MCP_API_KEY", "doc-key-ok")
+    monkeypatch.setattr(mcp_server, "user_db", _FakeUserDB())
+    monkeypatch.setattr(mcp_server, "AzureDocumentIntelligenceService", _FakeDocService)
+    monkeypatch.setattr(mcp_server.vector_db, "upsert_external_record", fake_upsert_external_record)
+    monkeypatch.setattr(mcp_server.settings, "mcp_external_ingestion_enabled", True)
+    monkeypatch.setattr(mcp_server.settings, "mcp_external_document_enabled", True)
+    monkeypatch.setattr(mcp_server.settings, "azure_document_intelligence_endpoint", "https://example.cognitiveservices.azure.com")
+    monkeypatch.setattr(mcp_server.settings, "azure_document_intelligence_key", "key")
+    monkeypatch.setattr(mcp_server.settings, "azure_document_intelligence_model_id", "prebuilt-read")
+    mcp_server._rate_limiter._calls.clear()
+
+    out = asyncio.run(
+        mcp_server.ingest_document(
+            filename="design.pdf",
+            content_base64="SGVsbG8=",
+            domain="architecture",
+            source_uri="https://contoso.sharepoint.com/docs/design.pdf",
+            api_key=None,
+            project_id="proj_123",
+        )
+    )
+
+    assert "Document ingested successfully" in out
+    assert captured["user_id"] == "u1"
+    assert captured["record"] is not None
+    assert captured["record"].source_type == "document"
+
+
 def test_search_memory_includes_lineage_and_confidence(monkeypatch):
     class _FakeUserDB:
         def get_user_by_mcp_api_key(self, api_key: str):

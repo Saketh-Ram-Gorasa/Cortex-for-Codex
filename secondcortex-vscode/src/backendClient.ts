@@ -37,6 +37,51 @@ export interface ProjectResolveResponse {
     needsSelection: boolean;
 }
 
+export interface IncidentHypothesis {
+    id: string;
+    rank: number;
+    cause: string;
+    confidence: number;
+    supportingEvidenceIds: string[];
+}
+
+export interface IncidentRecoveryOption {
+    strategy: string;
+    risk: string;
+    blastRadius: string;
+    estimatedTimeMinutes: number;
+    commands: string[];
+}
+
+export interface IncidentEvidenceNode {
+    id: string;
+    type: string;
+    timestamp: string;
+    file: string;
+    branch: string;
+    summary: string;
+    source: string;
+}
+
+export interface IncidentPacketResponse {
+    incidentId: string;
+    summary: string;
+    confidence: number;
+    hypotheses: IncidentHypothesis[];
+    recoveryOptions: IncidentRecoveryOption[];
+    contradictions: string[];
+    evidenceNodes: IncidentEvidenceNode[];
+    disproofChecks: string[];
+}
+
+export interface DocumentIngestResult {
+    status: string;
+    recordId: string;
+    sourceType: string;
+    confidence: number;
+    entities: string[];
+}
+
 /**
  * BackendClient – HTTP client for communicating with the SecondCortex FastAPI backend.
  * Sends an Authorization: Bearer <JWT> header for per-user authentication.
@@ -111,6 +156,77 @@ export class BackendClient {
         }
     }
 
+    async ingestNote(note: string, projectId?: string): Promise<boolean> {
+        const trimmedNote = note.trim();
+        if (!trimmedNote) {
+            return false;
+        }
+
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || 'unknown-workspace';
+        const noteEntities = this.extractNoteEntities(trimmedNote);
+
+        const payload: Record<string, unknown> = {
+            timestamp: new Date().toISOString(),
+            workspaceFolder,
+            activeFile: 'secondcortex://notes/manual-note.md',
+            languageId: 'markdown',
+            shadowGraph: `Developer note:\n${trimmedNote}`,
+            gitBranch: null,
+            projectId: projectId || null,
+            terminalCommands: [],
+            functionContext: {
+                source: 'manual_note',
+                noteEntities,
+                noteLength: trimmedNote.length,
+            },
+        };
+
+        return this.sendSnapshot(payload);
+    }
+
+    async ingestDocument(payload: {
+        filename: string;
+        contentBase64: string;
+        domain: string;
+        sourceUri?: string;
+        projectId?: string;
+    }): Promise<DocumentIngestResult | null> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/ingest/document`, {
+                method: 'POST',
+                headers: await this.getHeaders(),
+                body: JSON.stringify(payload),
+            });
+
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
+
+            if (!res.ok) {
+                const text = await res.text().catch(() => 'No response body');
+                this.output.appendLine(`[BackendClient] Document ingest failed: ${res.status} ${res.statusText}`);
+                this.output.appendLine(`[BackendClient] Document ingest details: ${text}`);
+                return null;
+            }
+
+            return (await res.json()) as DocumentIngestResult;
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error ingesting document: ${err}`);
+            return null;
+        }
+    }
+
+    private extractNoteEntities(note: string): string[] {
+        const hashtags = note.match(/#[a-zA-Z0-9_-]+/g) || [];
+        const titleCaseWords = note.match(/\b[A-Z][a-zA-Z0-9_]{2,}\b/g) || [];
+        const merged = [...hashtags.map((tag) => tag.replace(/^#/, '')), ...titleCaseWords]
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+
+        return Array.from(new Set(merged)).slice(0, 12);
+    }
+
     async listProjects(): Promise<ProjectSummary[]> {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/projects`, {
@@ -158,7 +274,7 @@ export class BackendClient {
     /**
      * Ask a natural-language question to the Planner agent.
      */
-    async askQuestion(question: string, sessionId?: string): Promise<{ summary: string; commands?: unknown[] } | null> {
+    async askQuestion(question: string, sessionId?: string): Promise<{ summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }> } | null> {
         try {
             let url = `${this.baseUrl}/api/v1/query`;
             if (sessionId) {
@@ -188,12 +304,41 @@ export class BackendClient {
                 } catch { /* not JSON */ }
                 return { summary: errorMsg, commands: [], _error: true } as any;
             }
-            return (await res.json()) as { summary: string; commands?: unknown[] };
+            return (await res.json()) as { summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }> };
         } catch (err: any) {
             this.output.appendLine(`[BackendClient] Network error querying backend: ${err.message || err}`);
             if (err.stack) {
                 this.output.appendLine(`[BackendClient] Stack: ${err.stack}`);
             }
+            return null;
+        }
+    }
+
+    async getIncidentPacket(question: string, projectId?: string, timeWindow: string = '24h'): Promise<IncidentPacketResponse | null> {
+        try {
+            const payload: Record<string, unknown> = { question, timeWindow };
+            if (projectId) {
+                payload.projectId = projectId;
+            }
+
+            const res = await fetch(`${this.baseUrl}/api/v1/incident/packet`, {
+                method: 'POST',
+                headers: await this.getHeaders(),
+                body: JSON.stringify(payload),
+            });
+
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Incident packet request failed: ${res.status} ${res.statusText}`);
+                return null;
+            }
+
+            return (await res.json()) as IncidentPacketResponse;
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error requesting incident packet: ${err}`);
             return null;
         }
     }

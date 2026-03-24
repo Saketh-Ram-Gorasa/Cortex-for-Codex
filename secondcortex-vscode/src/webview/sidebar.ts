@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { BackendClient } from '../backendClient';
+import { BackendClient, IncidentPacketResponse } from '../backendClient';
 import { AuthService } from '../auth/authService';
 
 /**
@@ -70,6 +70,45 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     let sessionId = message.sessionId as string | undefined;
                     this.output.appendLine(`[Sidebar] User asked: ${question} (session: ${sessionId})`);
 
+                    const trimmedQuestion = (question || '').trim();
+                    const addCommandMatch = trimmedQuestion.match(/^\/add\s+([\s\S]+)$/i);
+
+                    if (addCommandMatch) {
+                        const noteBody = addCommandMatch[1].trim();
+                        if (!noteBody) {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Usage: /add <important note>',
+                            });
+                            break;
+                        }
+
+                        if (!sessionId) {
+                            const createdSessionId = await this.backend.createChatSession('Quick Note');
+                            if (createdSessionId) {
+                                sessionId = createdSessionId;
+                                this.postMessage({ type: 'sessionBound', sessionId });
+                            }
+                        }
+
+                        this.postMessage({ type: 'loading' });
+                        const ingested = await this.backend.ingestNote(noteBody, this.getSelectedProjectId?.());
+                        if (ingested) {
+                            this.postMessage({
+                                type: 'answer',
+                                summary: 'Saved note to SecondCortex memory. It is now available for context retrieval and external agent queries.',
+                                commands: [],
+                                sessionId,
+                            });
+                        } else {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Could not ingest note. Make sure backend is running and you are logged in.',
+                            });
+                        }
+                        break;
+                    }
+
                     // Ensure chats are always attached to a session so they appear in "Past Chats".
                     if (!sessionId) {
                         const autoTitle = (question || 'New Chat').trim().slice(0, 48) || 'New Chat';
@@ -98,11 +137,42 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         break;
                     }
 
+                    const incidentIntent = normalized.startsWith('/incident') || normalized.startsWith('incident:');
+                    if (incidentIntent) {
+                        this.postMessage({ type: 'loading' });
+
+                        const cleanedQuestion = question
+                            .replace(/^\s*\/incident\s*/i, '')
+                            .replace(/^\s*incident:\s*/i, '')
+                            .trim() || 'Why did this incident happen?';
+
+                        const incidentPacket = await this.backend.getIncidentPacket(
+                            cleanedQuestion,
+                            this.getSelectedProjectId?.(),
+                            '24h',
+                        );
+
+                        if (incidentPacket) {
+                            this.postMessage({
+                                type: 'answer',
+                                summary: this.formatIncidentPacketResponse(incidentPacket),
+                                commands: [],
+                                sessionId,
+                            });
+                        } else {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Could not load incident packet from backend.',
+                            });
+                        }
+                        break;
+                    }
+
                     this.postMessage({ type: 'loading' });
 
                     const response = await this.backend.askQuestion(question, sessionId);
                     if (response && !(response as any)._error) {
-                        const styledSummary = this.formatAssistantResponse(response.summary, response.commands ?? []);
+                        const styledSummary = this.formatAssistantResponse(response.summary, response.commands ?? [], response.sources ?? []);
                         this.postMessage({
                             type: 'answer',
                             summary: styledSummary,
@@ -118,6 +188,92 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         this.postMessage({
                             type: 'error',
                             message: 'Could not reach the SecondCortex backend. Is it running?',
+                        });
+                    }
+                    break;
+                }
+                case 'addNote': {
+                    const note = (message.note as string || '').trim();
+                    if (!note) {
+                        this.postMessage({ type: 'error', message: 'Note cannot be empty.' });
+                        break;
+                    }
+
+                    this.postMessage({ type: 'loading' });
+                    const ingested = await this.backend.ingestNote(note, this.getSelectedProjectId?.());
+                    if (ingested) {
+                        this.postMessage({
+                            type: 'answer',
+                            summary: 'Saved note to SecondCortex memory. You can also use `/add <note>` from chat for quick capture.',
+                            commands: [],
+                            sessionId: message.sessionId,
+                        });
+                    } else {
+                        this.postMessage({
+                            type: 'error',
+                            message: 'Could not ingest note. Make sure backend is running and you are logged in.',
+                        });
+                    }
+                    break;
+                }
+                case 'uploadDocument': {
+                    const selected = await vscode.window.showOpenDialog({
+                        canSelectMany: false,
+                        openLabel: 'Upload to SecondCortex',
+                        filters: {
+                            'Documents': ['pdf', 'txt', 'md', 'docx'],
+                            'Images': ['png', 'jpg', 'jpeg'],
+                            'All Files': ['*'],
+                        },
+                    });
+
+                    const fileUri = selected?.[0];
+                    if (!fileUri) {
+                        break;
+                    }
+
+                    this.postMessage({ type: 'loading' });
+
+                    try {
+                        const bytes = await vscode.workspace.fs.readFile(fileUri);
+                        const filename = fileUri.path.split('/').pop() || 'document';
+                        const encoded = Buffer.from(bytes).toString('base64');
+
+                        const result = await this.backend.ingestDocument({
+                            filename,
+                            contentBase64: encoded,
+                            domain: 'documentation',
+                            sourceUri: fileUri.toString(),
+                            projectId: this.getSelectedProjectId?.(),
+                        });
+
+                        if (!result) {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Could not ingest document. Ensure backend flags/config are enabled and retry.',
+                            });
+                            break;
+                        }
+
+                        this.postMessage({
+                            type: 'answer',
+                            summary: [
+                                'Document ingested into SecondCortex memory.',
+                                '',
+                                `- File: ${filename}`,
+                                `- Record ID: ${result.recordId}`,
+                                `- Source Type: ${result.sourceType}`,
+                                `- Confidence: ${Math.round((result.confidence || 0) * 100)}%`,
+                                `- Entities: ${(result.entities || []).slice(0, 8).join(', ') || 'none'}`,
+                            ].join('\n'),
+                            commands: [],
+                            sessionId: message.sessionId,
+                        });
+                    } catch (err) {
+                        this.output.appendLine(`[Sidebar] Upload document failed: ${err}`);
+                        this.postMessage({
+                            type: 'error',
+                            message: 'Could not read or upload the selected document.',
                         });
                     }
                     break;
@@ -194,15 +350,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage(message);
     }
 
-    private formatAssistantResponse(summary: string, commands: unknown[]): string {
+    private formatAssistantResponse(
+        summary: string,
+        commands: unknown[],
+        sources: Array<{ type?: string; id?: string; uri?: string }>,
+    ): string {
         const cleanSummary = (summary || '').trim();
         const commandLines = this.buildCommandLines(commands);
+        const sourceLines = this.buildSourceLines(sources);
 
-        if (commandLines.length === 0) {
-            return cleanSummary;
+        const sections: string[] = [];
+        if (cleanSummary) {
+            sections.push(cleanSummary);
+        }
+        if (commandLines.length > 0) {
+            sections.push(`Suggested actions:\n${commandLines.map((line) => `- ${line}`).join('\n')}`);
+        }
+        if (sourceLines.length > 0) {
+            sections.push(`Sources:\n${sourceLines.map((line) => `- ${line}`).join('\n')}`);
         }
 
-        return `${cleanSummary}\n\nSuggested actions:\n${commandLines.map((line) => `- ${line}`).join('\n')}`;
+        return sections.join('\n\n');
     }
 
     private buildCommandLines(commands: unknown[]): string[] {
@@ -232,6 +400,55 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         return lines;
+    }
+
+    private buildSourceLines(sources: Array<{ type?: string; id?: string; uri?: string }>): string[] {
+        const lines: string[] = [];
+
+        for (const source of sources || []) {
+            const sourceType = (source?.type || 'source').trim();
+            const sourceId = (source?.id || '').trim();
+            const sourceUri = (source?.uri || '').trim();
+            const descriptor = sourceId || sourceUri || 'unknown';
+            lines.push(`${sourceType}: ${descriptor}`);
+        }
+
+        return lines;
+    }
+
+    private formatIncidentPacketResponse(packet: IncidentPacketResponse): string {
+        const contradictions = packet.contradictions || [];
+        const disproofChecks = packet.disproofChecks || [];
+        const recovery = packet.recoveryOptions || [];
+
+        const sections: string[] = [
+            `Incident packet: ${packet.incidentId}`,
+            packet.summary || 'No incident summary provided.',
+            `Confidence: ${Math.round((packet.confidence || 0) * 100)}%`,
+        ];
+
+        if (recovery.length > 0) {
+            sections.push(
+                `Recovery options:\n${recovery
+                    .slice(0, 3)
+                    .map((option) => `- ${option.strategy} (risk=${option.risk}, blast=${option.blastRadius}, eta=${option.estimatedTimeMinutes}m)`)
+                    .join('\n')}`,
+            );
+        }
+
+        if (contradictions.length > 0) {
+            sections.push(`Contradictions:\n${contradictions.slice(0, 5).map((item) => `- ${item}`).join('\n')}`);
+        } else {
+            sections.push('Contradictions:\n- none');
+        }
+
+        if (disproofChecks.length > 0) {
+            sections.push(`Disproof checks:\n${disproofChecks.slice(0, 5).map((item) => `- ${item}`).join('\n')}`);
+        } else {
+            sections.push('Disproof checks:\n- add one falsification test per hypothesis');
+        }
+
+        return sections.join('\n\n');
     }
 
     private getHtml(
@@ -828,6 +1045,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <div class="header-actions">
             <button class="icon-btn" onclick="toggleHistory()">History</button>
             <button class="icon-btn primary" onclick="startNewChat()">New Chat</button>
+            <button class="icon-btn" onclick="uploadDocument()">Upload Doc</button>
+            <button class="icon-btn" onclick="addNote()">Note</button>
             <button class="icon-btn" onclick="selectProject()">My Projects</button>
             <button class="icon-btn" onclick="doLogout()">Logout</button>
         </div>
@@ -1004,6 +1223,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         function startNewChat() {
             vscode.postMessage({ type: 'newChat', title: 'New Chat' });
+        }
+
+        function addNote() {
+            const note = window.prompt('Add note to SecondCortex memory');
+            if (note === null) {
+                return;
+            }
+            const trimmed = String(note).trim();
+            if (!trimmed) {
+                return;
+            }
+            addMessage('user', '/add ' + trimmed);
+            state.messages.push({ role: 'user', content: '/add ' + trimmed, timestamp: new Date().toISOString() });
+            saveState();
+            setPendingRequest(true);
+            vscode.postMessage({ type: 'addNote', note: trimmed, sessionId: state.sessionId });
+        }
+
+        function uploadDocument() {
+            vscode.postMessage({ type: 'uploadDocument', sessionId: state.sessionId });
         }
 
         function loadSession(id) {

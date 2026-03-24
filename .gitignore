@@ -60,7 +60,7 @@ chroma_db/
 skills-lock.json
 
 # ── Docs (Local Only) ───────────────────────────────────────
-docs/
+docs/plans/
 project_log.txt
 git_log.txt
 backend_logs/
