@@ -218,6 +218,16 @@ class ProjectDB:
                 return None
         return self.get_project_by_id(project_id)
 
+    def delete_project(self, project_id: str, owner_user_id: str) -> bool:
+        """Hard-delete a project. Only the owner can delete."""
+        with sqlite3.connect(self.db_path) as conn:
+            result = conn.execute(
+                "DELETE FROM projects WHERE id = ? AND owner_user_id = ?",
+                (project_id, owner_user_id),
+            )
+            conn.commit()
+            return int(result.rowcount or 0) > 0
+
     def resolve_candidates(
         self,
         user_id: str,

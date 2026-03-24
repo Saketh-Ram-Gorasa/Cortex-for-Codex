@@ -102,6 +102,27 @@ class Settings(BaseSettings):
     pm_guest_token_expiry_seconds: int = Field(8 * 3600, validation_alias="PM_GUEST_TOKEN_EXPIRY_SECONDS")
     project_scoped_ingestion_enabled: bool = Field(False, validation_alias="PROJECT_SCOPED_INGESTION_ENABLED")
 
+    # MCP hardening and rollout controls
+    mcp_dns_rebinding_protection_enabled: bool = Field(
+        True,
+        validation_alias="MCP_DNS_REBINDING_PROTECTION_ENABLED",
+    )
+    mcp_legacy_tool_api_key_enabled: bool = Field(True, validation_alias="MCP_LEGACY_TOOL_API_KEY_ENABLED")
+    mcp_max_top_k: int = Field(20, validation_alias="MCP_MAX_TOP_K")
+    mcp_default_top_k: int = Field(5, validation_alias="MCP_DEFAULT_TOP_K")
+    mcp_max_query_chars: int = Field(1000, validation_alias="MCP_MAX_QUERY_CHARS")
+    mcp_rate_limit_per_minute: int = Field(60, validation_alias="MCP_RATE_LIMIT_PER_MINUTE")
+    mcp_key_ttl_days: int = Field(90, validation_alias="MCP_KEY_TTL_DAYS")
+    mcp_task_summary_cache_enabled: bool = Field(True, validation_alias="MCP_TASK_SUMMARY_CACHE_ENABLED")
+    mcp_task_summary_ttl_seconds: int = Field(900, validation_alias="MCP_TASK_SUMMARY_TTL_SECONDS")
+    mcp_task_summary_default_max_tokens: int = Field(
+        1000,
+        validation_alias="MCP_TASK_SUMMARY_DEFAULT_MAX_TOKENS",
+    )
+    mcp_external_ingestion_enabled: bool = Field(True, validation_alias="MCP_EXTERNAL_INGESTION_ENABLED")
+    mcp_external_slack_enabled: bool = Field(False, validation_alias="MCP_EXTERNAL_SLACK_ENABLED")
+    mcp_external_max_messages: int = Field(50, validation_alias="MCP_EXTERNAL_MAX_MESSAGES")
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

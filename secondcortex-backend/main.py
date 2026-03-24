@@ -743,10 +743,19 @@ async def handle_query(
         # Step 1: Plan - break the question into search tasks
         plan_result = await planner.plan(req.question, user_id=user_id)
 
-        # Step 2: Execute — synthesize and validate
+        # Step 2: Dual retrieval (facts + snapshots)
+        facts = await vector_db.recall_facts(req.question, top_k=5, user_id=user_id, min_salience=0.3)
+        retrieved_facts = [{"id": f.get("id"), "content": f.get("document"), "kind": f.get("kind"), "salience": f.get("salience")} for f in facts]
+        retrieved_snapshots = [{"id": item.get("id"), "timestamp": item.get("timestamp"), "file": item.get("activeFile"), "branch": item.get("gitBranch")} for item in plan_result.retrieved_context[:5]]
+
+        # Step 3: Execute — synthesize and validate
         response = await executor.synthesize(req.question, plan_result)
 
-        # Step 3: Persist history
+        # Step 4: Enrich response with retrieved facts and snapshots
+        response.retrieved_facts = retrieved_facts
+        response.retrieved_snapshots = retrieved_snapshots
+
+        # Step 5: Persist history
         user_db.save_chat_message(user_id, "user", req.question, session_id=session_id)
         user_db.save_chat_message(user_id, "assistant", response.summary, session_id=session_id)
 

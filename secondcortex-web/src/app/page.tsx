@@ -16,9 +16,50 @@ export default function LandingPage() {
   const [pmPassword, setPmPassword] = useState("");
   const [pmError, setPmError] = useState("");
   const [isPmSubmitting, setIsPmSubmitting] = useState(false);
+  const [queryLoading, setQueryLoading] = useState(false);
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://sc-backend-suhaan.azurewebsites.net";
   const extensionMarketplaceUrl = "https://marketplace.visualstudio.com/items?itemName=secondcortex-labs.secondcortex";
   const githubRepoUrl = "https://github.com/Syed-Suhaan/SecondCortex-Labs";
+  const mainNavLinks = [
+    { label: "Live Graph", href: "/live" },
+    { label: "PM Dashboard", href: "/live?pm=true" },
+    { label: "Testing", href: "/testing" },
+    { label: "Architecture", href: "#arch" },
+  ];
+  const quickAccessFeatures = [
+    {
+      title: "Live Context Graph",
+      description: "Open realtime context graph with timeline and retrieval overlays.",
+      href: "/live",
+    },
+    {
+      title: "PM Dashboard",
+      description: "Track team progress and summaries from a manager view.",
+      href: "/live?pm=true",
+    },
+    {
+      title: "Testing Playground",
+      description: "Access the internal testing routes and validation screens.",
+      href: "/testing",
+    },
+    {
+      title: "Install Extension",
+      description: "Install SecondCortex extension from VS Code Marketplace.",
+      href: extensionMarketplaceUrl,
+      external: true,
+    },
+    {
+      title: "Sign Up",
+      description: "Create account and start capturing memory in your workspace.",
+      href: "/signup",
+    },
+    {
+      title: "GitHub Repository",
+      description: "Explore source code, releases, and implementation details.",
+      href: githubRepoUrl,
+      external: true,
+    },
+  ];
 
   const loginPmSession = async (email: string, password: string, guestMode: boolean) => {
     const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
@@ -99,8 +140,9 @@ export default function LandingPage() {
     const queryInput = document.getElementById("query-input") as HTMLInputElement | null;
     const resultText = document.getElementById("result-text");
     const resultLabel = document.querySelector(".result-label");
+    const queryResult = document.getElementById("query-result");
 
-    if (!canvas || !tb || !queryBtn || !queryInput || !resultText || !resultLabel) {
+    if (!canvas || !tb || !queryBtn || !queryInput || !resultText || !resultLabel || !queryResult) {
       return;
     }
 
@@ -325,25 +367,44 @@ export default function LandingPage() {
       timers.push(timerId);
     };
 
+    let isQueryLoading = false;
+    const setQueryLoadingState = (isLoading: boolean) => {
+      isQueryLoading = isLoading;
+      setQueryLoading(isLoading);
+      queryResult.classList.toggle("loading", isLoading);
+    };
+
     const fireQuery = (q: string) => {
-      const match = queryMap[q.toLowerCase().trim()];
-      if (match) {
-        memEntries.forEach((e) => {
-          e.classList.remove("active");
-          if (e.dataset.file === match) {
-            e.classList.add("active");
-          }
-        });
-        const response = responses[match];
-        if (response) {
-          setResult(response.label, response.text);
-        }
-      } else {
-        setResult(
-          "Retriever - Semantic Search",
-          `Searching vector store for: "${q}"\n\nRunning cosine similarity search across ${Math.floor(Math.random() * 800) + 200} stored snapshots...\n\nTop result: similarity score 0.${Math.floor(Math.random() * 15) + 80} - context match found in active workspace history.`,
-        );
+      const normalized = q.toLowerCase().trim();
+      if (!normalized || isQueryLoading) {
+        return;
       }
+
+      setQueryLoadingState(true);
+      setResult("Retriever - Searching…", `Searching vector store for: "${q}"\n\nRunning semantic retrieval…`);
+
+      const timerId = window.setTimeout(() => {
+        const match = queryMap[normalized];
+        if (match) {
+          memEntries.forEach((e) => {
+            e.classList.remove("active");
+            if (e.dataset.file === match) {
+              e.classList.add("active");
+            }
+          });
+          const response = responses[match];
+          if (response) {
+            setResult(response.label, response.text);
+          }
+        } else {
+          setResult(
+            "Retriever - Semantic Search",
+            `Searching vector store for: "${q}"\n\nRunning cosine similarity search across ${Math.floor(Math.random() * 800) + 200} stored snapshots…\n\nTop result: similarity score 0.${Math.floor(Math.random() * 15) + 80} - context match found in active workspace history.`,
+          );
+        }
+        setQueryLoadingState(false);
+      }, 600);
+      timers.push(timerId);
     };
 
     const memHandlers: Array<{ el: HTMLElement; fn: EventListener }> = [];
@@ -406,21 +467,11 @@ export default function LandingPage() {
           Second<span>Cortex</span>
         </div>
         <ul className="nav-links">
-          <li>
-            <a href="#how">Architecture</a>
-          </li>
-          <li>
-            <a href="#agents">Agents</a>
-          </li>
-          <li>
-            <a href="#memory">Memory</a>
-          </li>
-          <li>
-            <a href="#security">Security</a>
-          </li>
-          <li>
-            <a href="/testing">Testing</a>
-          </li>
+          {mainNavLinks.map((item) => (
+            <li key={item.label}>
+              <a href={item.href}>{item.label}</a>
+            </li>
+          ))}
         </ul>
         <div className="nav-actions">
           <button
@@ -539,6 +590,35 @@ export default function LandingPage() {
           <div className="stat-label">Typical Retrieval Latency</div>
         </div>
       </div>
+
+      <section id="feature-access" className="feature-access-section reveal">
+        <div className="section-label">Quick Access</div>
+        <div className="section-title">
+          Recently shipped
+          <br />
+          <em>feature shortcuts.</em>
+        </div>
+        <p className="section-desc">
+          Jump directly to core workflows from one place. Main workflows stay in the navbar, and secondary links are
+          organized in the footer.
+        </p>
+
+        <div className="feature-access-grid">
+          {quickAccessFeatures.map((feature) => (
+            <a
+              key={feature.title}
+              className="feature-access-card"
+              href={feature.href}
+              target={feature.external ? "_blank" : undefined}
+              rel={feature.external ? "noreferrer" : undefined}
+            >
+              <div className="feature-access-title">{feature.title}</div>
+              <div className="feature-access-desc">{feature.description}</div>
+              <span className="feature-access-cta">Open -&gt;</span>
+            </a>
+          ))}
+        </div>
+      </section>
 
       <section id="how">
         <div className="section-label">How it works</div>
@@ -756,8 +836,15 @@ export default function LandingPage() {
                 type="text"
                 placeholder="How does authentication work in this project?"
               />
-              <button className="query-btn" id="query-btn" type="button">
-                SEARCH
+              <button className={`query-btn ${queryLoading ? "is-loading" : ""}`} id="query-btn" type="button" disabled={queryLoading}>
+                {queryLoading ? (
+                  <>
+                    <span className="loading-ring" aria-hidden="true" />
+                    Searching…
+                  </>
+                ) : (
+                  "SEARCH"
+                )}
               </button>
             </div>
 
@@ -782,7 +869,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-            <div className="query-result" id="query-result">
+            <div className="query-result" id="query-result" aria-live="polite">
               <div className="result-label">Retriever - Awaiting Query</div>
               <div className="result-text" id="result-text">
                 Click any memory entry or type a query to see semantic retrieval in action.
@@ -936,12 +1023,37 @@ export default function LandingPage() {
         <div className="nav-logo">
           Second<span>Cortex</span>
         </div>
-        <div className="footer-links">
-          <a href={githubRepoUrl} target="_blank" rel="noreferrer">GitHub</a>
-          <a href="#">Docs</a>
-          <a href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">VS Code Marketplace</a>
-          <a href="#">MCP Protocol</a>
+
+        <div className="footer-links-group">
+          <div className="footer-links-title">Product</div>
+          <div className="footer-links">
+            <a href="#how">How It Works</a>
+            <a href="#agents">Agents</a>
+            <a href="#memory">Memory Demo</a>
+            <a href="#security">Security</a>
+          </div>
         </div>
+
+        <div className="footer-links-group">
+          <div className="footer-links-title">Access</div>
+          <div className="footer-links">
+            <a href="/login">Login</a>
+            <a href="/signup">Sign Up</a>
+            <a href="/live">Live Graph</a>
+            <a href="/live?pm=true">PM Dashboard</a>
+            <a href="/testing">Testing</a>
+          </div>
+        </div>
+
+        <div className="footer-links-group">
+          <div className="footer-links-title">Resources</div>
+          <div className="footer-links">
+            <a href={githubRepoUrl} target="_blank" rel="noreferrer">GitHub</a>
+            <a href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">VS Code Marketplace</a>
+            <a href="#arch">Architecture</a>
+          </div>
+        </div>
+
         <div>Copyright 2026 SecondCortex Labs</div>
       </footer>
 
@@ -982,10 +1094,17 @@ export default function LandingPage() {
                 required
               />
 
-              {pmError && <div className="sc-auth-error">{pmError}</div>}
+              {pmError && <div className="sc-auth-error" aria-live="polite">{pmError}</div>}
 
               <button type="submit" disabled={isPmSubmitting} className="btn-primary sc-auth-submit">
-                {isPmSubmitting ? "Please wait..." : "Login as PM"}
+                {isPmSubmitting ? (
+                  <>
+                    <span className="loading-ring" aria-hidden="true" />
+                    Please wait…
+                  </>
+                ) : (
+                  "Login as PM"
+                )}
               </button>
 
               <button
@@ -994,7 +1113,14 @@ export default function LandingPage() {
                 disabled={isPmSubmitting}
                 onClick={handlePmGuestLogin}
               >
-                {isPmSubmitting ? "Please wait..." : "Guest Login"}
+                {isPmSubmitting ? (
+                  <>
+                    <span className="loading-ring" aria-hidden="true" />
+                    Please wait…
+                  </>
+                ) : (
+                  "Guest Login"
+                )}
               </button>
             </form>
           </div>

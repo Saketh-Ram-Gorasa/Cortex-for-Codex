@@ -199,6 +199,9 @@ docker compose down
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/mcp-key`
 - `GET /api/v1/auth/mcp-key`
+- `POST /api/v1/auth/mcp-keys`
+- `GET /api/v1/auth/mcp-keys`
+- `DELETE /api/v1/auth/mcp-keys/{key_id}`
 - `POST /api/v1/snapshot`
 - `POST /api/v1/ingest/git`
 - `POST /api/v1/query`
@@ -225,6 +228,25 @@ What this enables:
 
 Current MCP tool:
 - `search_memory(query, api_key, top_k=5)`: returns relevant snapshots with summary, branch, file path, entities, and code context excerpts.
+
+Hierarchical MCP tools:
+- `get_codebase_overview(api_key?, max_items=8)`: ultra-compressed recent codebase orientation.
+- `get_domain_context(domain, api_key?, top_k?)`: domain-level decisions and active streams.
+- `get_function_context(file, function, api_key?, top_k?)`: function/file decision history and code context.
+- `get_raw_snapshots(query, max_tokens=1000, api_key?, top_k?)`: budgeted raw snapshot retrieval for deeper agent control.
+- `get_related_context(anchor, relationship_types?, depth=1, max_tokens=1000, api_key?, top_k?)`: graph-style related context traversal (`co-changed`, `co-debugged`, `causally-linked`) with bounded depth and budget.
+- `get_context_for_task_type(domain, task_type, project_id?, max_tokens?, api_key?, top_k?)`: task-scoped summaries (`debugging`, `code-review`, `feature-addition`, `incident-response`) with freshness metadata and cache-aware fallback synthesis.
+- `ingest_slack_thread(channel, thread_ts, messages, domain, project_id?, api_key?)`: feature-flagged Slack ingestion path using normalized provenance metadata and reconciliation before persistence.
+- `get_mcp_metrics(api_key?)`: runtime observability summary (request counters, auth/rate-limit rejections, cache stats, graph fan-out, per-tool latency p50/p95/p99).
+- `get_mcp_readiness(api_key?)`: readiness status for auth principal resolution, vector storage availability, and connector flags.
+
+Lineage/confidence behavior:
+- MCP retrieval output now includes source lineage fields (`source_type`, `source_uri`) and `confidence_score` when available.
+- External-source context is merged into the same semantic retrieval surface as code snapshots for cross-source reasoning.
+
+MCP client auth options:
+- Legacy per-call key argument: pass `api_key` directly to `search_memory`.
+- Recommended client integration: set `SECONDCORTEX_MCP_API_KEY` in the MCP host process (Claude Desktop/Cursor/Copilot bridge) so keys are not pasted into every chat.
 
 This is the foundation for using SecondCortex not just as an extension, but as a developer memory service across tooling.
 

@@ -160,6 +160,21 @@ async def unarchive_project(project_id: str, user_id: str = Depends(get_current_
     return _normalize_project_response(updated)
 
 
+@router.delete("/{project_id}")
+async def delete_project(project_id: str, user_id: str = Depends(get_current_user)):
+    existing = project_db.get_project_by_id(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if existing["owner_user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Only project owner can delete project")
+
+    deleted = project_db.delete_project(project_id=project_id, owner_user_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+    logger.info("Deleted project %s for user=%s", project_id, user_id)
+    return {"status": "deleted", "project_id": project_id}
+
+
 @router.post("/resolve", response_model=ProjectResolveResponse)
 async def resolve_project(request: ProjectResolveRequest, user_id: str = Depends(get_current_user)):
     team_id = request.team_id or _resolve_user_team_id(user_id)

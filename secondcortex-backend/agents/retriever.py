@@ -126,6 +126,9 @@ class RetrieverAgent:
             
             await self.vector_db.upsert_snapshot(stored, user_id=user_id)
             logger.info("Finished Vector DB upsert step for %s.", stored.id)
+            
+            # ── NEW: Extract and store facts from the snapshot ──────────────────
+            await self._extract_and_store_facts(payload, metadata, stored.id, user_id)
         elif metadata.operation == MemoryOperation.DELETE:
             logger.info("Snapshot marked as rabbit hole — not storing.")
 
@@ -175,3 +178,62 @@ class RetrieverAgent:
         except Exception as exc:
             logger.error("Router LLM call failed: %s", exc)
             return MemoryMetadata(operation=MemoryOperation.NOOP, summary="LLM call failed")
+
+    async def _extract_and_store_facts(
+        self,
+        payload,  # SnapshotPayload
+        metadata,  # MemoryMetadata
+        snapshot_id: str,
+        user_id: str | None,
+    ) -> None:
+        """Extract entities/insights from snapshot and persist as facts."""
+        try:
+            from models.schemas import Fact
+            import uuid as uuid_lib
+            
+            logger.info("Extracting facts from snapshot %s", snapshot_id)
+            
+            # Call LLM to extract structured facts
+            prompt = f"""
+Extract key facts from this developer snapshot in JSON format:
+{{
+  "facts": [
+    {{"content": "...", "kind": "world|experience|opinion", "salience": 0.0-1.0, "entities": ["entity1"]}}
+  ]
+}}
+
+Snapshot summary: {metadata.summary}
+Active file: {payload.active_file}
+Shadow graph: {payload.shadow_graph[:1000]}
+
+Return ONLY valid JSON. Max 3 facts. Be specific and factual.
+"""
+            
+            response = await task_chat_completion(
+                task="retriever",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=400,
+            )
+            
+            raw = response.choices[0].message.content or "{}"
+            data = json.loads(raw)
+            
+            for fact_data in data.get("facts", []):
+                fact = Fact(
+                    id=str(uuid_lib.uuid4()),
+                    content=fact_data.get("content", ""),
+                    kind=fact_data.get("kind", "experience"),
+                    salience=min(1.0, max(0.0, float(fact_data.get("salience", 0.5)))),
+                    confidence=0.7,  # LLM-extracted facts start at medium confidence
+                    entities=fact_data.get("entities", []),
+                    source_snapshot_id=snapshot_id,
+                    created_at=payload.timestamp,
+                    last_accessed_at=payload.timestamp,
+                )
+                await self.vector_db.upsert_fact(fact, user_id=user_id)
+                logger.info("Stored fact: %s", fact.id)
+        
+        except Exception as exc:
+            logger.warning("Fact extraction failed for snapshot %s: %s", snapshot_id, exc)
+            # Non-blocking; snapshot still succeeded

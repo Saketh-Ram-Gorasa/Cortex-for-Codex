@@ -333,7 +333,7 @@ async def _call_with_provider(
     payload: dict,
     auth_variant: str = "default",
 ):
-    client = _cached_client(provider, async_mode=False, auth_variant=auth_variant)
+    client = _cached_client(provider, async_mode=True, auth_variant=auth_variant)
 
     if endpoint == "chat.completions":
         return await rate_limited_call(

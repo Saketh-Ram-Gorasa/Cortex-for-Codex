@@ -5,6 +5,7 @@ Provider-aware rate limiting and retry wrapper for LLM API calls.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from dataclasses import dataclass
@@ -143,6 +144,8 @@ async def rate_limited_call(
     for attempt in range(limiter.policy.max_retries + 1):
         await limiter.wait_if_needed()
         try:
+            if inspect.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
             return await asyncio.to_thread(func, *args, **kwargs)
         except Exception as exc:
             if not _looks_like_rate_limit_error(exc):
