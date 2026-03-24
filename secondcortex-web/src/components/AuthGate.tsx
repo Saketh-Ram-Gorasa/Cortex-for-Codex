@@ -74,7 +74,12 @@ export default function AuthGate() {
 
     const storedToken = localStorage.getItem('sc_jwt_token');
     if (!storedToken) {
-      router.push('/');
+      if (pmQuery) {
+        const redirect = guestQuery ? '/?pm=true&guest=true' : '/?pm=true';
+        router.push(redirect);
+      } else {
+        router.push('/');
+      }
       setIsChecking(false);
       return;
     }

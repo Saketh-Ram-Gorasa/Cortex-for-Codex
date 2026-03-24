@@ -22,7 +22,7 @@ export default function LandingPage() {
   const githubRepoUrl = "https://github.com/Syed-Suhaan/SecondCortex-Labs";
   const mainNavLinks = [
     { label: "Live Graph", href: "/live" },
-    { label: "PM Dashboard", href: "/live?pm=true" },
+    { label: "PM Dashboard", href: "/?pm=true" },
     { label: "Testing", href: "/testing" },
     { label: "Architecture", href: "#arch" },
   ];
@@ -35,7 +35,7 @@ export default function LandingPage() {
     {
       title: "PM Dashboard",
       description: "Track team progress and summaries from a manager view.",
-      href: "/live?pm=true",
+      href: "/?pm=true",
     },
     {
       title: "Testing Playground",
@@ -140,6 +140,14 @@ export default function LandingPage() {
       setIsPmSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("pm") === "true") {
+      setPmError("");
+      setShowPmModal(true);
+    }
+  }, []);
 
   useEffect(() => {
     const canvas = document.getElementById("neural-canvas") as HTMLCanvasElement | null;
@@ -1048,7 +1056,7 @@ export default function LandingPage() {
             <a href="/login">Login</a>
             <a href="/signup">Sign Up</a>
             <a href="/live">Live Graph</a>
-            <a href="/live?pm=true">PM Dashboard</a>
+            <a href="/?pm=true">PM Dashboard</a>
             <a href="/testing">Testing</a>
           </div>
         </div>
