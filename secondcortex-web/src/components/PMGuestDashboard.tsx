@@ -8,65 +8,27 @@ interface PMGuestDashboardProps {
   backendUrl?: string;
 }
 
-interface TeamMember {
+interface ProjectItem {
   id: string;
-  email: string;
-  display_name: string;
-  created_at: string;
+  name: string;
+  visibility: 'private' | 'team';
+  is_archived: boolean;
 }
 
-interface MemberSnapshot {
+interface ProjectSnapshot {
   id: string;
   user_id: string;
-  team_id: string | null;
-  workspace: string;
+  project_id: string | null;
+  timestamp: number;
   active_file: string;
   git_branch: string | null;
-  terminal_commands: string[];
   summary: string;
-  enriched_context: Record<string, unknown>;
-  timestamp: number;
-  synced: number;
-}
-
-interface MemberSummary {
-  user_id: string;
-  display_name: string;
-  email: string;
-  snapshots_count: number;
-  commits_count: number;
-  languages_used: string[];
-  files_modified: number;
-  status: string;
-}
-
-interface TeamSummaryResponse {
-  team_id: string;
-  period: 'daily' | 'weekly';
-  members: MemberSummary[];
-  total_snapshots: number;
-  total_commits: number;
-  active_members: number;
-  daily_breakdown?: Record<string, number>;
-  generated_at: string;
+  terminal_commands: string[];
 }
 
 interface ChatMessage {
   role: 'assistant' | 'user';
   text: string;
-}
-
-type SummaryKind = 'daily' | 'weekly' | 'feature';
-
-const PM_GUEST_MEMBER: TeamMember = {
-  id: 'saketh',
-  email: 'saketh@secondcortex.local',
-  display_name: 'Saketh',
-  created_at: '1970-01-01T00:00:00.000Z',
-};
-
-function toDisplayName(member: TeamMember): string {
-  return (member.display_name || member.email.split('@')[0] || member.id).trim();
 }
 
 function toEpochMs(ts: number): number {
@@ -76,52 +38,20 @@ function toEpochMs(ts: number): number {
   return ts * 1000;
 }
 
-function fmtSnapshotLine(snapshot: MemberSnapshot): string {
+function fmtSnapshotLine(snapshot: ProjectSnapshot): string {
   const when = new Date(toEpochMs(snapshot.timestamp)).toLocaleString();
   return `${when} | ${snapshot.git_branch || 'no-branch'} | ${snapshot.active_file || 'unknown-file'} | ${
     snapshot.summary || 'No summary'
   }`;
 }
 
-function topFiles(snapshots: MemberSnapshot[], limit: number): string[] {
-  const counts: Record<string, number> = {};
-  for (const snapshot of snapshots) {
-    const key = snapshot.active_file || 'unknown-file';
-    counts[key] = (counts[key] || 0) + 1;
-  }
-  return Object.entries(counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([file, count]) => `${file} (${count})`);
-}
-
-function isSakethMember(member: TeamMember): boolean {
-  const id = member.id.trim().toLowerCase();
-  const email = member.email.trim().toLowerCase();
-  const displayName = toDisplayName(member).trim().toLowerCase();
-  const normalizedId = id.replace(/[^a-z0-9]/g, '');
-  const normalizedDisplay = displayName.replace(/[^a-z0-9]/g, '');
-  const normalizedEmail = email.replace(/[^a-z0-9@.]/g, '');
-  const aliases = ['saketh', 'saket'];
-  return aliases.some(
-    (alias) =>
-      normalizedId.includes(alias) ||
-      normalizedDisplay.includes(alias) ||
-      normalizedEmail.includes(alias),
-  );
-}
-
 export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGuestDashboardProps) {
   const apiBase = backendUrl || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
 
-  const [teamId, setTeamId] = useState<string | null>(null);
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [selectedMemberId, setSelectedMemberId] = useState<string>('');
-  const [summarySelection, setSummarySelection] = useState<{ memberId: string; kind: SummaryKind } | null>(null);
-
-  const [snapshotsByMember, setSnapshotsByMember] = useState<Record<string, MemberSnapshot[]>>({});
-  const [dailySummary, setDailySummary] = useState<TeamSummaryResponse | null>(null);
-  const [weeklySummary, setWeeklySummary] = useState<TeamSummaryResponse | null>(null);
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [projectSnapshots, setProjectSnapshots] = useState<ProjectSnapshot[]>([]);
+  const [projectSnapshotError, setProjectSnapshotError] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,202 +61,101 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      text: 'Welcome PM. Chat is connected to the integrated backend LLM. Use member summary buttons for daily, weekly, or feature compression views.',
+      text: 'Welcome PM. Chat is connected to the integrated backend LLM. Ask about project progress, status, or any development questions.',
     },
   ]);
 
-  const visibleMembers = useMemo(() => {
-    const hasSaketh = members.some(isSakethMember);
-    return hasSaketh ? members : [...members, PM_GUEST_MEMBER];
-  }, [members]);
-
   useEffect(() => {
     let cancelled = false;
+    let polling = false;
 
-    const loadData = async () => {
-      setLoading(true);
-      setError(null);
+    const loadData = async (background: boolean) => {
+      if (!background) {
+        setLoading(true);
+        setError(null);
+      }
       try {
-        const meRes = await fetch(`${apiBase}/api/v1/auth/me`, {
+        // Fetch projects list
+        const projectsRes = await fetch(`${apiBase}/api/v1/projects`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!meRes.ok) {
-          throw new Error('Unable to fetch PM profile. Please log in again.');
+        if (!projectsRes.ok) {
+          throw new Error('Unable to fetch projects list.');
         }
-        const meData = await meRes.json();
-        const resolvedTeamId = String(meData.team_id || '').trim();
-        if (!resolvedTeamId) {
-          throw new Error('No team is linked to this PM account.');
-        }
+        const projectsData = (await projectsRes.json()) as { projects: ProjectItem[] };
+        const projectList = projectsData.projects || [];
+        
         if (cancelled) {
           return;
         }
-        setTeamId(resolvedTeamId);
-
-        const membersRes = await fetch(`${apiBase}/api/v1/teams/${resolvedTeamId}/members`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!membersRes.ok) {
-          throw new Error('Unable to fetch team members.');
-        }
-        const rawMembers = (await membersRes.json()) as TeamMember[];
-        const orderedMembers = [...rawMembers].sort((a, b) => toDisplayName(a).localeCompare(toDisplayName(b)));
-        if (cancelled) {
-          return;
-        }
-        const displayMembers = orderedMembers.some(isSakethMember)
-          ? orderedMembers
-          : [...orderedMembers, PM_GUEST_MEMBER];
-        setMembers(displayMembers);
-        if (displayMembers.length > 0) {
-          const initial = displayMembers[0].id;
-          setSelectedMemberId((prev) => prev || initial);
-          setSummarySelection((prev) => prev || { memberId: initial, kind: 'daily' });
+        
+        setProjects(projectList);
+        
+        // Auto-select first project if none selected
+        if (!selectedProjectId && projectList.length > 0) {
+          setSelectedProjectId(projectList[0].id);
         }
 
-        const snapshotEntries = await Promise.all(
-          orderedMembers.map(async (member) => {
-            const res = await fetch(
-              `${apiBase}/api/v1/teams/${resolvedTeamId}/members/${member.id}/snapshots?limit=1000`,
+        // Fetch snapshots for selected project
+        if (selectedProjectId && projectList.some(p => p.id === selectedProjectId)) {
+          try {
+            const snapshotsRes = await fetch(
+              `${apiBase}/api/v1/snapshots/timeline?projectId=${encodeURIComponent(selectedProjectId)}&limit=1000`,
               {
                 headers: { Authorization: `Bearer ${token}` },
               },
             );
-            if (!res.ok) {
-              return [member.id, []] as const;
+            if (!snapshotsRes.ok) {
+              const errBody = await snapshotsRes.json().catch(() => ({}));
+              const errDetail =
+                typeof errBody?.detail === 'string'
+                  ? errBody.detail
+                  : `HTTP ${snapshotsRes.status} while fetching project timeline`;
+              setProjectSnapshotError(errDetail);
+              setProjectSnapshots([]);
+            } else {
+              const timelineData = (await snapshotsRes.json()) as { timeline: ProjectSnapshot[] };
+              setProjectSnapshots(timelineData.timeline || []);
+              setProjectSnapshotError('');
             }
-            const snapshots = (await res.json()) as MemberSnapshot[];
-            return [member.id, snapshots] as const;
-          }),
-        );
-        if (!cancelled) {
-          setSnapshotsByMember(Object.fromEntries(snapshotEntries));
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Snapshot fetch failed';
+            setProjectSnapshotError(msg);
+            setProjectSnapshots([]);
+          }
         }
 
-        const [dailyRes, weeklyRes] = await Promise.all([
-          fetch(`${apiBase}/api/v1/summaries/team/${resolvedTeamId}/daily`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch(`${apiBase}/api/v1/summaries/team/${resolvedTeamId}/weekly`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-
         if (!cancelled) {
-          if (dailyRes.ok) {
-            setDailySummary((await dailyRes.json()) as TeamSummaryResponse);
-          }
-          if (weeklyRes.ok) {
-            setWeeklySummary((await weeklyRes.json()) as TeamSummaryResponse);
-          }
+          setLoading(false);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !background) {
           setError(err instanceof Error ? err.message : 'Failed to load PM dashboard data.');
-        }
-      } finally {
-        if (!cancelled) {
           setLoading(false);
         }
       }
     };
 
-    loadData();
+    void loadData(false);
+
+    const intervalId = window.setInterval(async () => {
+      if (cancelled || polling) {
+        return;
+      }
+
+      polling = true;
+      try {
+        await loadData(true);
+      } finally {
+        polling = false;
+      }
+    }, 5000);
+
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
     };
-  }, [apiBase, token]);
-
-  const selectedMember = useMemo(
-    () => visibleMembers.find((member) => member.id === selectedMemberId),
-    [visibleMembers, selectedMemberId],
-  );
-
-  const resolvedSelectedMemberId = useMemo(() => {
-    if (!selectedMember) {
-      return '';
-    }
-
-    if ((snapshotsByMember[selectedMember.id] || []).length > 0) {
-      return selectedMember.id;
-    }
-
-    if (isSakethMember(selectedMember)) {
-      const directAliasMatch = members.find(
-        (member) => member.id !== selectedMember.id && isSakethMember(member),
-      );
-      if (directAliasMatch) {
-        return directAliasMatch.id;
-      }
-
-      const bestSnapshotMatch = members
-        .map((member) => ({ memberId: member.id, count: (snapshotsByMember[member.id] || []).length }))
-        .sort((a, b) => b.count - a.count)[0];
-      if (bestSnapshotMatch && bestSnapshotMatch.count > 0) {
-        return bestSnapshotMatch.memberId;
-      }
-    }
-
-    return selectedMember.id;
-  }, [selectedMember, members, snapshotsByMember]);
-
-  const selectedSnapshots = resolvedSelectedMemberId ? snapshotsByMember[resolvedSelectedMemberId] || [] : [];
-  const totalSnapshots = Object.values(snapshotsByMember).reduce((sum, snapshots) => sum + snapshots.length, 0);
-
-  const getCompressedSummaryText = (memberId: string, kind: SummaryKind): string => {
-    const member = visibleMembers.find((m) => m.id === memberId);
-    if (!member) {
-      return 'Member not found.';
-    }
-    const resolvedMemberId =
-      memberId === selectedMemberId && resolvedSelectedMemberId ? resolvedSelectedMemberId : memberId;
-    const snapshots = snapshotsByMember[resolvedMemberId] || [];
-    const name = toDisplayName(member);
-
-    if (kind === 'daily') {
-      const now = Date.now();
-      const dayCutoff = now - 24 * 60 * 60 * 1000;
-      const lastDay = snapshots.filter((snapshot) => toEpochMs(snapshot.timestamp) >= dayCutoff);
-      const dailyRow = dailySummary?.members?.find((m) => m.user_id === resolvedMemberId);
-      const recentLines = lastDay.slice(0, 2).map((snapshot) => fmtSnapshotLine(snapshot));
-      return [
-        `${name} daily summary:`,
-        dailyRow
-          ? `Snapshots: ${dailyRow.snapshots_count}, Files modified: ${dailyRow.files_modified}, Status: ${dailyRow.status}`
-          : `Snapshots (last 24h): ${lastDay.length}`,
-        recentLines.length > 0 ? `Recent: ${recentLines.join(' | ')}` : 'No recent IDE entries in last 24h.',
-      ].join('\n');
-    }
-
-    if (kind === 'weekly') {
-      const now = Date.now();
-      const weekCutoff = now - 7 * 24 * 60 * 60 * 1000;
-      const lastWeek = snapshots.filter((snapshot) => toEpochMs(snapshot.timestamp) >= weekCutoff);
-      const weeklyRow = weeklySummary?.members?.find((m) => m.user_id === resolvedMemberId);
-      return [
-        `${name} weekly summary:`,
-        weeklyRow
-          ? `Snapshots: ${weeklyRow.snapshots_count}, Files modified: ${weeklyRow.files_modified}, Status: ${weeklyRow.status}`
-          : `Snapshots (last 7d): ${lastWeek.length}`,
-        `Top files: ${topFiles(lastWeek, 3).join(', ') || 'none'}`,
-      ].join('\n');
-    }
-
-    const featureFiles = topFiles(snapshots, 4);
-    const latest = snapshots.slice(0, 3).map((snapshot) => fmtSnapshotLine(snapshot));
-    return [
-      `${name} feature summary:`,
-      `Most active feature files: ${featureFiles.join(', ') || 'none'}`,
-      latest.length > 0 ? `Latest feature work: ${latest.join(' | ')}` : 'No feature snapshots available.',
-    ].join('\n');
-  };
-
-  const selectedSummaryText = useMemo(() => {
-    if (!summarySelection) {
-      return 'Select a summary button beside a team member to view compressed output.';
-    }
-    return getCompressedSummaryText(summarySelection.memberId, summarySelection.kind);
-  }, [summarySelection, visibleMembers, snapshotsByMember, dailySummary, weeklySummary, selectedMemberId, resolvedSelectedMemberId]);
+  }, [apiBase, token, selectedProjectId]);
 
   const sendQuestion = async (input: string) => {
     const trimmed = input.trim();
@@ -339,21 +168,26 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     setChatPending(true);
 
     try {
-      const memberContext = selectedMember
+      const selectedProject = projects.find((p) => p.id === selectedProjectId);
+      const projectContext = selectedProject
         ? [
-            `Selected member: ${toDisplayName(selectedMember)} (${selectedMember.email})`,
-            `Latest IDE history lines:`,
-            ...(selectedSnapshots.slice(0, 20).map((snapshot) => `- ${fmtSnapshotLine(snapshot)}`) || []),
-            `Compressed daily: ${getCompressedSummaryText(selectedMember.id, 'daily')}`,
-            `Compressed weekly: ${getCompressedSummaryText(selectedMember.id, 'weekly')}`,
-            `Compressed feature: ${getCompressedSummaryText(selectedMember.id, 'feature')}`,
+            `Selected project: ${selectedProject.name}`,
+            `Project visibility: ${selectedProject.visibility || 'private'}`,
+            `Project status: ${selectedProject.is_archived ? 'archived' : 'active'}`,
+            `Total snapshots tracked: ${projectSnapshots.length}`,
+            `Recent Project Activity (last 20 snapshots):`,
+            ...(projectSnapshots.slice(0, 20).map((snapshot) => `- ${fmtSnapshotLine(snapshot)}`) || []),
+            `Project Evolution Summary:`,
+            getProjectEvolutionSummary(),
           ].join('\n')
-        : 'No member selected.';
+        : 'No project selected.';
 
       const composedQuestion = [
         'You are assisting a Project Manager on SecondCortex.',
-        'Answer with practical project-status details and avoid hallucinations.',
-        memberContext,
+        'Provide practical insights about project progress and evolution.',
+        'Do not attribute work to individuals; focus on project status.',
+        'Avoid hallucinations and stick to the provided context.',
+        projectContext,
         `PM question: ${trimmed}`,
       ].join('\n\n');
 
@@ -391,6 +225,56 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     }
   };
 
+  // Compute project evolution summary (feature compression)
+  const getProjectEvolutionSummary = (): string => {
+    if (!selectedProjectId) {
+      return 'Select a project to view evolution timeline.';
+    }
+    
+    const snapshots = projectSnapshots;
+    if (snapshots.length === 0) {
+      return 'No snapshots available for this project yet.';
+    }
+
+    // Extract top files, branches, and recent activity
+    const fileMap = new Map<string, number>();
+    const branchSet = new Set<string>();
+    const commandSamples: string[] = [];
+
+    snapshots.forEach((snapshot) => {
+      if (snapshot.active_file) {
+        const ext = snapshot.active_file.split('.').pop() || 'file';
+        const key = `[${ext}] ${snapshot.active_file.split('/').pop()}`;
+        fileMap.set(key, (fileMap.get(key) || 0) + 1);
+      }
+      if (snapshot.git_branch) {
+        branchSet.add(snapshot.git_branch);
+      }
+      if (snapshot.terminal_commands && snapshot.terminal_commands.length > 0) {
+        commandSamples.push(...snapshot.terminal_commands.slice(0, 1));
+      }
+    });
+
+    const topFiles = Array.from(fileMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([file]) => file);
+
+    const branches = Array.from(branchSet).slice(0, 3);
+    const recentActivity = snapshots
+      .slice(0, 2)
+      .map((s) => `[${new Date(toEpochMs(s.timestamp)).toLocaleTimeString()}] ${fmtSnapshotLine(s)}`)
+      .join('\n');
+
+    return [
+      `Project Evolution Summary:`,
+      `Total snapshots tracked: ${snapshots.length}`,
+      `Most active files: ${topFiles.join(', ') || 'none'}`,
+      `Active branches: ${branches.join(', ') || 'main'}`,
+      `\nRecent Activity:\n${recentActivity}`,
+    ].join('\n');
+  };
+
   return (
     <div className="sc-dashboard-wrap">
       <div className="sc-dashboard-inner">
@@ -398,26 +282,25 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
           <p className="section-label">PM Control Surface</p>
           <h1 className="section-title pm-title">Project Manager Dashboard</h1>
           <p className="section-desc">
-            Chat uses the integrated backend LLM. Compressed summaries are shown in member mini-boxes: Daily, Weekly,
-            Feature.
+            Manage projects and track their evolution. View project snapshots, analyze progress, and chat with AI for project insights.
           </p>
           <p className="pm-mode-chip">{isGuestPm ? 'Guest PM Session' : 'Authenticated PM Session'}</p>
         </div>
 
         <div className="sc-stats-grid">
-          <StatCard title="Team Members" value={String(visibleMembers.length)} subtitle="Visible in PM scope" />
-          <StatCard title="Snapshots Indexed" value={String(totalSnapshots)} subtitle="Full IDE history available" />
+          <StatCard title="Active Projects" value={String(projects.length)} subtitle="In your portfolio" />
+          <StatCard title="Project Snapshots" value={String(projectSnapshots.length)} subtitle="Evolution history available" />
           <StatCard
-            title="Compression Feed"
-            value={dailySummary || weeklySummary ? 'Connected' : 'Pending'}
-            subtitle={teamId ? `Team: ${teamId}` : 'No team'}
+            title="Evolution Status"
+            value={projectSnapshots.length > 0 ? 'Tracking' : 'Pending'}
+            subtitle={selectedProjectId ? `Selected: ${projects.find(p => p.id === selectedProjectId)?.name || 'Unknown'}` : 'Select a project'}
           />
         </div>
 
         {loading && (
           <div className="sc-dashboard-panel">
             <div className="sc-dashboard-panel-inner" style={{ display: 'block' }}>
-              <p className="sc-dashboard-p">Loading team history and summaries...</p>
+              <p className="sc-dashboard-p">Loading projects and evolution data...</p>
             </div>
           </div>
         )}
@@ -431,131 +314,107 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         )}
 
         {!loading && !error && (
-          <div className="pm-grid">
+          <div className="pm-grid" style={{ display: 'grid', gridTemplateColumns: '25% 1fr', gap: '16px', marginTop: '20px' }}>
+            {/* LEFT PANEL: Project List */}
             <section className="pm-panel">
-              <p className="pm-panel-kicker">Team Directory</p>
-              <h2 className="pm-panel-title">Team Members</h2>
+              <p className="pm-panel-kicker">Portfolio</p>
+              <h2 className="pm-panel-title">Projects</h2>
               <div className="pm-member-list">
-                {visibleMembers.map((member) => (
-                  <div key={member.id} className={`pm-member-btn ${member.id === selectedMemberId ? 'active' : ''}`}>
-                    <button className="pm-member-main" type="button" onClick={() => setSelectedMemberId(member.id)}>
-                      <span className="pm-member-name">{toDisplayName(member)}</span>
-                      <span className="pm-member-role">{member.email}</span>
-                    </button>
-
-                    <div className="pm-member-actions">
+                {projects.length === 0 ? (
+                  <p style={{ padding: '12px', color: '#999' }}>No projects available.</p>
+                ) : (
+                  projects.map((project) => (
+                    <div key={project.id} className={`pm-member-btn ${project.id === selectedProjectId ? 'active' : ''}`}>
                       <button
+                        className="pm-member-main"
                         type="button"
-                        className="pm-mini-btn"
-                        onClick={() => {
-                          setSelectedMemberId(member.id);
-                          setSummarySelection({ memberId: member.id, kind: 'daily' });
-                        }}
+                        onClick={() => setSelectedProjectId(project.id)}
                       >
-                        <span className="pm-mini-btn-key">D</span>
-                        <span className="pm-mini-btn-label">Daily</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="pm-mini-btn"
-                        onClick={() => {
-                          setSelectedMemberId(member.id);
-                          setSummarySelection({ memberId: member.id, kind: 'weekly' });
-                        }}
-                      >
-                        <span className="pm-mini-btn-key">W</span>
-                        <span className="pm-mini-btn-label">Weekly</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="pm-mini-btn"
-                        onClick={() => {
-                          setSelectedMemberId(member.id);
-                          setSummarySelection({ memberId: member.id, kind: 'feature' });
-                        }}
-                      >
-                        <span className="pm-mini-btn-key">F</span>
-                        <span className="pm-mini-btn-label">Feature</span>
+                        <span className="pm-member-name">{project.name}</span>
+                        <span className="pm-member-role">{project.visibility || 'private'}</span>
                       </button>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
+            </section>
 
-              <div className="pm-summary-card">
-                <div className="pm-summary-head">
-                  <span>Compressed Summary</span>
-                  <span className="pm-summary-tag">
-                    {summarySelection ? summarySelection.kind.toUpperCase() : 'NONE'}
-                  </span>
+            {/* RIGHT SIDE: 2-row layout (evolution + chat) */}
+            <div style={{ display: 'grid', gridTemplateRows: '1fr 1fr', gap: '16px' }}>
+              {/* RIGHT-TOP: Project Evolution */}
+              <section className="pm-panel">
+                <p className="pm-panel-kicker">Evolution</p>
+                <h2 className="pm-panel-title">Project Progress</h2>
+                <div className="pm-history">
+                  {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
+                  {projectSnapshots.length === 0 && !projectSnapshotError && (
+                    <p className="pm-history-summary">No snapshots for this project yet.</p>
+                  )}
+                  {projectSnapshots.length > 0 && (
+                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '12px', color: '#666', padding: '8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                      {getProjectEvolutionSummary()}
+                    </div>
+                  )}
+                  <div style={{ marginTop: '12px', maxHeight: '200px', overflowY: 'auto' }}>
+                    {projectSnapshots.slice(0, 5).map((snapshot) => (
+                      <article key={snapshot.id} className="pm-history-item">
+                        <div className="pm-history-head">
+                          <span>{new Date(toEpochMs(snapshot.timestamp)).toLocaleString()}</span>
+                          <span>{snapshot.git_branch || 'no-branch'}</span>
+                        </div>
+                        <div className="pm-history-file">{snapshot.active_file || 'Unknown file'}</div>
+                        <p className="pm-history-summary">{snapshot.summary || 'No summary for this snapshot.'}</p>
+                      </article>
+                    ))}
+                  </div>
                 </div>
-                <p>{selectedSummaryText}</p>
-              </div>
-            </section>
+              </section>
 
-            <section className="pm-panel">
-              <p className="pm-panel-kicker">Timeline</p>
-              <h2 className="pm-panel-title">
-                {selectedMember ? `${toDisplayName(selectedMember)} Snapshot History` : 'Snapshot History'}
-              </h2>
-              <div className="pm-history">
-                {selectedSnapshots.length === 0 && <p className="pm-history-summary">No synced snapshots found.</p>}
-                {selectedSnapshots.map((snapshot) => (
-                  <article key={snapshot.id} className="pm-history-item">
-                    <div className="pm-history-head">
-                      <span>{new Date(toEpochMs(snapshot.timestamp)).toLocaleString()}</span>
-                      <span>{snapshot.git_branch || 'no-branch'}</span>
+              {/* RIGHT-BOTTOM: Chatbot */}
+              <section className="pm-panel">
+                <p className="pm-panel-kicker">Assistant</p>
+                <h2 className="pm-panel-title">Project Insights</h2>
+                <p className="pm-chat-sub">Ask about project progress and evolution.</p>
+
+                <div className="pm-chat-quick">
+                  <button type="button" onClick={() => sendQuestion('What is the current project status based on recent activity?')}>
+                    Project status
+                  </button>
+                  <button type="button" onClick={() => sendQuestion('What are the key files and technologies in use?')}>
+                    Tech stack
+                  </button>
+                  <button type="button" onClick={() => sendQuestion('Summarize the project progress.')}>
+                    Progress
+                  </button>
+                </div>
+
+                <div className="pm-chat-log" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '12px' }}>
+                  {messages.map((message, index) => (
+                    <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
+                      {message.text}
                     </div>
-                    <div className="pm-history-file">{snapshot.active_file || 'Unknown file'}</div>
-                    <p className="pm-history-summary">{snapshot.summary || 'No summary for this snapshot.'}</p>
-                  </article>
-                ))}
-              </div>
-            </section>
+                  ))}
+                </div>
 
-            <section className="pm-panel">
-              <p className="pm-panel-kicker">Assistant</p>
-              <h2 className="pm-panel-title">PM Chatbot</h2>
-              <p className="pm-chat-sub">Powered by the integrated LLM endpoint (`/api/v1/pm/query`).</p>
-
-              <div className="pm-chat-quick">
-                <button type="button" onClick={() => sendQuestion('What is this member currently progressing on?')}>
-                  Current progress
-                </button>
-                <button type="button" onClick={() => sendQuestion('Any blockers or execution risks from current history?')}>
-                  Risks
-                </button>
-                <button type="button" onClick={() => sendQuestion('Summarize the last sprint progress for PM review')}>
-                  Sprint summary
-                </button>
-              </div>
-
-              <div className="pm-chat-log">
-                {messages.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
-                    {message.text}
-                  </div>
-                ))}
-              </div>
-
-              <div className="pm-chat-input-wrap">
-                <input
-                  className="query-input"
-                  type="text"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      void sendQuestion(question);
-                    }
-                  }}
-                  placeholder="Ask PM progress question"
-                />
-                <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
-                  {chatPending ? 'Asking...' : 'Ask'}
-                </button>
-              </div>
-            </section>
+                <div className="pm-chat-input-wrap">
+                  <input
+                    className="query-input"
+                    type="text"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        void sendQuestion(question);
+                      }
+                    }}
+                    placeholder="Ask about project"
+                  />
+                  <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
+                    {chatPending ? 'Asking...' : 'Ask'}
+                  </button>
+                </div>
+              </section>
+            </div>
           </div>
         )}
       </div>

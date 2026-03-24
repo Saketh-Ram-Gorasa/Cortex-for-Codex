@@ -13,6 +13,7 @@ from pydantic import BaseModel, EmailStr
 from auth.database import UserDB
 from auth.jwt_handler import create_token, create_pm_guest_token, get_current_principal, get_current_user
 from config import settings
+from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.auth.routes")
 
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 # Shared DB instance
 user_db = UserDB()
+vector_db = VectorDBService()
 
 
 class SignupRequest(BaseModel):
@@ -143,14 +145,43 @@ async def pm_guest_login():
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no team is configured.")
 
     resolved_team_id: str | None = None
+    fallback_team_id: str | None = None
     for candidate in candidate_team_ids:
         team_info = user_db.get_team_info(candidate)
         if not team_info:
             continue
+
         members = user_db.get_team_members(candidate)
-        if members:
+        if not members:
+            continue
+
+        # Keep a fallback in case snapshot stores are temporarily unavailable.
+        if fallback_team_id is None:
+            fallback_team_id = candidate
+
+        # Prefer teams where at least one member has snapshot history.
+        has_snapshot_activity = False
+        for member in members:
+            member_id = str(member.get("id") or "").strip()
+            if not member_id:
+                continue
+
+            timeline = await vector_db.get_snapshot_timeline(limit=1, user_id=member_id)
+            if timeline:
+                has_snapshot_activity = True
+                break
+
+            legacy_rows = user_db.get_user_snapshots(member_id, limit=1)
+            if legacy_rows:
+                has_snapshot_activity = True
+                break
+
+        if has_snapshot_activity:
             resolved_team_id = candidate
             break
+
+    if not resolved_team_id and fallback_team_id:
+        resolved_team_id = fallback_team_id
 
     if not resolved_team_id:
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")

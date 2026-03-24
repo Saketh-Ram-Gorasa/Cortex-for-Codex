@@ -233,9 +233,8 @@ async def get_member_snapshots(
     if not member:
         raise HTTPException(status_code=404, detail="User not found")
 
-    member_team = member.get("team_id")
     _authorize_team_read(team_id, principal, user_db)
-    if member_team != team_id:
+    if not user_db.is_user_in_team(member_id, team_id):
         raise HTTPException(status_code=403, detail="Target member is not part of this team")
 
     if projectId:
@@ -282,7 +281,7 @@ async def get_member_snapshots(
                 MemberSnapshot(
                     id=str(row.get("id") or ""),
                     user_id=member_id,
-                    team_id=member_team,
+                    team_id=team_id,
                     project_id=str(row_project_id) if row_project_id else None,
                     workspace=str(row.get("workspace_folder") or ""),
                     active_file=str(row.get("active_file") or ""),
