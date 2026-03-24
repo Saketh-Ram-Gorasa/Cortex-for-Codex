@@ -29,9 +29,38 @@ export default function ProjectSelector({
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [loading, setLoading] = useState(false);
   const hasAutoSelected = useRef(false);
+  const hasBootstrappedDefault = useRef(false);
 
-  const stableOnChange = useCallback(onChange, []);
-  const stableOnNameChange = useCallback(onSelectedNameChange || (() => {}), []);
+  const stableOnChange = useCallback(onChange, [onChange]);
+  const stableOnNameChange = useCallback(onSelectedNameChange || (() => {}), [onSelectedNameChange]);
+
+  const normalizeName = (name: string) => name.toLowerCase().replace(/[\s\-_]/g, '');
+
+  const createDefaultSecondCortexProject = useCallback(async (): Promise<ProjectItem | null> => {
+    try {
+      const createRes = await fetch(`${backendUrl}/api/v1/projects`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'SecondCortex',
+          slug: 'secondcortex',
+          visibility: 'private',
+        }),
+      });
+
+      if (!createRes.ok) {
+        return null;
+      }
+
+      const created = (await createRes.json()) as ProjectItem;
+      return created;
+    } catch {
+      return null;
+    }
+  }, [backendUrl, token]);
 
   useEffect(() => {
     const loadProjects = async () => {
@@ -45,7 +74,18 @@ export default function ProjectSelector({
           return;
         }
         const data = await response.json() as { projects?: ProjectItem[] };
-        const visibleProjects = (data.projects || []).filter((project) => !project.is_archived);
+        let visibleProjects = (data.projects || []).filter((project) => !project.is_archived);
+
+        let scProject = visibleProjects.find((p) => normalizeName(p.name).includes('secondcortex'));
+        if (!scProject && !hasBootstrappedDefault.current) {
+          hasBootstrappedDefault.current = true;
+          const created = await createDefaultSecondCortexProject();
+          if (created && !created.is_archived) {
+            visibleProjects = [created, ...visibleProjects.filter((p) => p.id !== created.id)];
+            scProject = created;
+          }
+        }
+
         setProjects(visibleProjects);
 
         // If user already selected something valid, just sync the name
@@ -60,8 +100,6 @@ export default function ProjectSelector({
         // Auto-select only once: find a "secondcortex"-like project
         if (!hasAutoSelected.current && visibleProjects.length > 0) {
           hasAutoSelected.current = true;
-          const normalized = (name: string) => name.toLowerCase().replace(/[\s\-_]/g, '');
-          const scProject = visibleProjects.find((p) => normalized(p.name).includes('secondcortex'));
 
           if (scProject) {
             stableOnChange(scProject.id);
