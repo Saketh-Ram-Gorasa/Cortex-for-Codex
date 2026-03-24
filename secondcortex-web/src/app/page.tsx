@@ -89,10 +89,13 @@ export default function LandingPage() {
   const handlePmGuestLogin = async () => {
     setIsPmSubmitting(true);
     setPmError("");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
     try {
       const res = await fetch(`${backendUrl}/api/v1/auth/pm-guest/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -107,8 +110,13 @@ export default function LandingPage() {
       router.push("/live?pm=true&guest=true");
       setShowPmModal(false);
     } catch (err) {
-      setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setPmError("Guest PM login timed out. Please try again in a few seconds.");
+      } else {
+        setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setIsPmSubmitting(false);
     }
   };

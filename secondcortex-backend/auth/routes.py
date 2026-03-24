@@ -4,6 +4,7 @@ Auth API routes: signup, login, me.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -169,6 +170,14 @@ async def _bootstrap_secondcortex_project(team_id: str) -> None:
     )
 
 
+async def _bootstrap_secondcortex_project_safe(team_id: str) -> None:
+    """Run PM bootstrap without blocking or failing login responses."""
+    try:
+        await _bootstrap_secondcortex_project(team_id)
+    except Exception as exc:
+        logger.exception("PM bootstrap failed for team=%s: %s", team_id, exc)
+
+
 @router.post("/signup", response_model=AuthResponse)
 async def signup(req: SignupRequest):
     """Create a new account."""
@@ -331,7 +340,8 @@ async def pm_guest_login():
     if not resolved_team_id:
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")
 
-    await _bootstrap_secondcortex_project(resolved_team_id)
+    # Keep login fast: bootstrap/backfill in background instead of blocking response.
+    asyncio.create_task(_bootstrap_secondcortex_project_safe(resolved_team_id))
 
     display_name = (settings.pm_guest_display_name or "PM Guest").strip()
     token = create_pm_guest_token(team_id=resolved_team_id, display_name=display_name)
