@@ -458,7 +458,7 @@ export default function AuthGate() {
         )}
 
         <button onClick={handleLogout} className="btn-secondary sc-logout" type="button">
-          {isPmGuest ? 'Exit PM Guest' : 'Logout'}
+          Logout
         </button>
       </div>
 

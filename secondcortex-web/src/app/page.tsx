@@ -92,11 +92,19 @@ export default function LandingPage() {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 45000);
     try {
-      const res = await fetch(`${backendUrl}/api/v1/auth/pm-guest/login`, {
+      let res = await fetch(`${backendUrl}/api/v1/auth/pm-guest/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
       });
+
+      if (res.status === 404) {
+        res = await fetch(`${backendUrl}/api/v1/auth/pm_guest/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+        });
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1111,7 +1119,7 @@ export default function LandingPage() {
                     Please wait…
                   </>
                 ) : (
-                  "Login as PM"
+                  "Enter Team Cortex"
                 )}
               </button>
 
