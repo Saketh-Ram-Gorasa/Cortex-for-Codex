@@ -90,7 +90,7 @@ export default function LandingPage() {
     setIsPmSubmitting(true);
     setPmError("");
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+    const timeoutId = window.setTimeout(() => controller.abort(), 45000);
     try {
       const res = await fetch(`${backendUrl}/api/v1/auth/pm-guest/login`, {
         method: "POST",

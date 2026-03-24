@@ -313,17 +313,13 @@ async def pm_guest_login():
         if fallback_team_id is None:
             fallback_team_id = candidate
 
-        # Prefer teams where at least one member has snapshot history.
+        # Prefer teams where at least one member has synced snapshot history.
+        # Keep login path non-blocking by using local DB checks only.
         has_snapshot_activity = False
         for member in members:
             member_id = str(member.get("id") or "").strip()
             if not member_id:
                 continue
-
-            timeline = await vector_db.get_snapshot_timeline(limit=1, user_id=member_id)
-            if timeline:
-                has_snapshot_activity = True
-                break
 
             legacy_rows = user_db.get_user_snapshots(member_id, limit=1)
             if legacy_rows:
