@@ -22,7 +22,7 @@ export default function LandingPage() {
   const githubRepoUrl = "https://github.com/Syed-Suhaan/SecondCortex-Labs";
   const mainNavLinks = [
     { label: "Live Graph", href: "/live" },
-    { label: "PM Dashboard", href: "/live?pm=true" },
+    { label: "Team Cortex", href: "/?pm=true" },
     { label: "Testing", href: "/testing" },
     { label: "Architecture", href: "#arch" },
   ];
@@ -33,9 +33,9 @@ export default function LandingPage() {
       href: "/live",
     },
     {
-      title: "PM Dashboard",
-      description: "Track team progress and summaries from a manager view.",
-      href: "/live?pm=true",
+      title: "Team Cortex",
+      description: "Track team progress and timeline summaries from the manager surface.",
+      href: "/?pm=true",
     },
     {
       title: "Testing Playground",
@@ -70,7 +70,7 @@ export default function LandingPage() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "PM login failed. Please check credentials.");
+      throw new Error(err.detail || "Team Cortex login failed. Please check credentials.");
     }
 
     const data = await res.json();
@@ -108,7 +108,7 @@ export default function LandingPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Guest PM login is unavailable right now.");
+        throw new Error(err.detail || "Team Cortex guest login is unavailable right now.");
       }
 
       const data = await res.json();
@@ -119,9 +119,9 @@ export default function LandingPage() {
       setShowPmModal(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        setPmError("Guest PM login timed out. Please try again in a few seconds.");
+        setPmError("Team Cortex guest login timed out. Please try again in a few seconds.");
       } else {
-        setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
+        setPmError(err instanceof Error ? err.message : "Team Cortex guest login failed.");
       }
     } finally {
       window.clearTimeout(timeoutId);
@@ -148,6 +148,14 @@ export default function LandingPage() {
       setIsPmSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("pm") === "true") {
+      setPmError("");
+      setShowPmModal(true);
+    }
+  }, []);
 
   useEffect(() => {
     const canvas = document.getElementById("neural-canvas") as HTMLCanvasElement | null;
@@ -498,7 +506,7 @@ export default function LandingPage() {
               setShowPmModal(true);
             }}
           >
-            PM
+            Team Cortex
           </button>
           <a className="nav-login" href="/login">
             Login
@@ -1056,7 +1064,7 @@ export default function LandingPage() {
             <a href="/login">Login</a>
             <a href="/signup">Sign Up</a>
             <a href="/live">Live Graph</a>
-            <a href="/live?pm=true">PM Dashboard</a>
+            <a href="/?pm=true">Team Cortex</a>
             <a href="/testing">Testing</a>
           </div>
         </div>
@@ -1078,9 +1086,9 @@ export default function LandingPage() {
           <div className="sc-modal-backdrop" onClick={() => setShowPmModal(false)} />
           <div className="sc-modal-card pm-login-card">
             <div className="sc-auth-header">
-              <p className="sc-auth-eyebrow">Project Manager Access</p>
-              <h2 className="sc-auth-title">PM Login</h2>
-              <p className="sc-auth-sub">Log in as PM or continue with guest access to review team progress.</p>
+              <p className="sc-auth-eyebrow">Team Cortex Access</p>
+              <h2 className="sc-auth-title">Team Cortex Login</h2>
+              <p className="sc-auth-sub">Log in to Team Cortex or continue with guest access to review team progress.</p>
             </div>
 
             <form onSubmit={handlePmLogin} className="sc-auth-form">
@@ -1135,7 +1143,7 @@ export default function LandingPage() {
                     Please wait…
                   </>
                 ) : (
-                  "Guest Login"
+                  "Team Cortex Guest Login"
                 )}
               </button>
             </form>

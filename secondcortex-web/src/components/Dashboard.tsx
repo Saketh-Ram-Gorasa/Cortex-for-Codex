@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import SummaryWidget from '@/components/team/SummaryWidget';
-import PMGuestDashboard from '@/components/PMGuestDashboard';
+import TeamCortexDashboard from '@/components/TeamCortexDashboard';
 
 interface DashboardProps {
     token: string;
@@ -49,10 +49,6 @@ export default function Dashboard({
     selectedProjectId,
     selectedProjectName,
 }: DashboardProps) {
-    if (mode === 'pm') {
-        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
-    }
-
     const userId = getUserIdFromToken(token);
     const [statsLoading, setStatsLoading] = useState(true);
     const [stats, setStats] = useState<Stats>({
@@ -62,6 +58,11 @@ export default function Dashboard({
     });
 
     const fetchStats = useCallback(async () => {
+        if (mode === 'pm') {
+            setStatsLoading(false);
+            return;
+        }
+
         setStatsLoading(true);
         try {
             const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
@@ -92,13 +93,21 @@ export default function Dashboard({
         } finally {
             setStatsLoading(false);
         }
-    }, [backendUrl, token, selectedProjectId]);
+    }, [backendUrl, token, selectedProjectId, mode]);
 
     useEffect(() => {
+        if (mode === 'pm') {
+            return;
+        }
+
         fetchStats();
         const intervalId = window.setInterval(fetchStats, 5000);
         return () => window.clearInterval(intervalId);
-    }, [fetchStats]);
+    }, [fetchStats, mode]);
+
+    if (mode === 'pm') {
+        return <TeamCortexDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
+    }
 
     return (
         <div className="sc-dashboard-wrap">

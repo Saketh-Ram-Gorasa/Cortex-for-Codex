@@ -8,6 +8,7 @@ via the Model Context Protocol (MCP), so it can be queried by AI assistants like
 
 import sys
 import os
+import base64
 import logging
 import time
 import functools
@@ -24,6 +25,8 @@ from mcp.server.transport_security import TransportSecuritySettings
 from config import settings
 from services.vector_db import VectorDBService
 from services.external_ingest import ExternalIngestionService
+from services.azure_document_intelligence import AzureDocumentIntelligenceService
+from services.incident_archaeology import IncidentArchaeologyService
 from auth.database import UserDB
 
 # Initialize logging for MCP server
@@ -35,6 +38,7 @@ logger.info("Initializing VectorDBService for MCP...")
 vector_db = VectorDBService()
 user_db = UserDB()
 external_ingest = ExternalIngestionService()
+incident_archaeology = IncidentArchaeologyService()
 
 # Create the MCP Server, allowing ANY Production Host (Public)
 mcp = FastMCP(
@@ -564,6 +568,93 @@ async def ingest_slack_thread(
 
 
 @mcp.tool()
+@_track_mcp_tool("ingest_document")
+async def ingest_document(
+    filename: str,
+    content_base64: str,
+    domain: str,
+    source_uri: str | None = None,
+    api_key: str | None = None,
+    project_id: str | None = None,
+) -> str:
+    """Ingest a document using Azure AI Document Intelligence OCR/extraction (feature-flagged)."""
+    if not bool(settings.mcp_external_ingestion_enabled):
+        return "External ingestion is disabled by server policy."
+    if not bool(settings.mcp_external_document_enabled):
+        return "Document ingestion is disabled by server policy."
+
+    normalized_filename = (filename or "").strip()
+    normalized_domain = (domain or "").strip()
+    normalized_payload = (content_base64 or "").strip()
+    normalized_source_uri = (source_uri or "").strip()
+
+    if not normalized_filename or not normalized_domain or not normalized_payload:
+        return "Invalid request: filename, content_base64, and domain are required."
+
+    auth_query = f"document {normalized_filename} {normalized_domain}"
+    user, _normalized_query, _safe_top_k, error = _authenticate_request(api_key=api_key, query=auth_query, top_k=3)
+    if error:
+        return error
+
+    try:
+        content_bytes = base64.b64decode(normalized_payload, validate=True)
+    except Exception:
+        return "Invalid request: content_base64 must be valid base64-encoded bytes."
+
+    content_type = "application/octet-stream"
+    lowered = normalized_filename.lower()
+    if lowered.endswith(".pdf"):
+        content_type = "application/pdf"
+    elif lowered.endswith(".png"):
+        content_type = "image/png"
+    elif lowered.endswith(".jpg") or lowered.endswith(".jpeg"):
+        content_type = "image/jpeg"
+
+    extractor = AzureDocumentIntelligenceService(
+        endpoint=settings.azure_document_intelligence_endpoint,
+        api_key=settings.azure_document_intelligence_key,
+        model_id=settings.azure_document_intelligence_model_id,
+    )
+
+    extraction = extractor.extract_text_from_bytes(content_bytes, mime_type=content_type)
+    if extraction.get("error"):
+        return f"Document extraction failed: {extraction.get('error')}"
+
+    extracted_text = str(extraction.get("text") or "").strip()
+    if not extracted_text:
+        return "Document extraction returned empty text; nothing to ingest."
+
+    record = external_ingest.build_document_record(
+        source_name=normalized_filename,
+        source_uri=normalized_source_uri,
+        domain=normalized_domain,
+        extracted_text=extracted_text,
+        project_id=project_id,
+    )
+
+    extracted_confidence = extraction.get("confidence")
+    if isinstance(extracted_confidence, (int, float)):
+        record.confidence_score = max(0.0, min(float(extracted_confidence), 1.0))
+
+    reconciled = external_ingest.reconcile_records([record])
+    if not reconciled:
+        return "No ingestible document records found after reconciliation."
+
+    saved_id = await vector_db.upsert_external_record(reconciled[0], user_id=user["id"])
+    if not saved_id:
+        return "Failed to persist document into memory."
+
+    return (
+        f"Document ingested successfully.\n"
+        f"- Record ID: {saved_id}\n"
+        f"- Source: {reconciled[0].source_uri}\n"
+        f"- Domain: {reconciled[0].domain}\n"
+        f"- Confidence: {reconciled[0].confidence_score:.2f}\n"
+        f"- Entities extracted: {', '.join(reconciled[0].entities[:8]) or 'none'}"
+    )
+
+
+@mcp.tool()
 @_track_mcp_tool("get_codebase_overview")
 async def get_codebase_overview(api_key: str | None = None, max_items: int = 8) -> str:
     """Level 1 context: ultra-compressed overview of recent development activity."""
@@ -900,6 +991,108 @@ async def get_context_for_task_type(
         }
 
     return response
+
+
+@mcp.tool()
+@_track_mcp_tool("get_incident_packet")
+async def get_incident_packet(
+    question: str,
+    api_key: str | None = None,
+    project_id: str | None = None,
+    time_window: str = "24h",
+) -> str:
+    """Build a concise, contradiction-aware incident packet for external AI agents."""
+    user, normalized_query, safe_top_k, error = _authenticate_request(api_key=api_key, query=question, top_k=top_k_from_time_window(time_window))
+    if error:
+        return error
+
+    user_id = user["id"]
+    snapshots = await vector_db.semantic_search(
+        normalized_query,
+        top_k=max(3, safe_top_k),
+        user_id=user_id,
+        project_id=(project_id or None),
+    )
+    facts = await vector_db.recall_facts(normalized_query, top_k=3, user_id=user_id, min_salience=0.3)
+
+    normalized_facts = [
+        {
+            "id": str(fact.get("id") or f"fact_{index + 1}"),
+            "active_file": f"fact://{fact.get('kind') or 'memory'}",
+            "git_branch": "knowledge",
+            "timestamp": str(fact.get("created_at") or datetime.now(timezone.utc).isoformat()),
+            "summary": str(fact.get("document") or fact.get("content") or ""),
+            "source_type": "fact",
+            "source_id": str(fact.get("id") or ""),
+            "source_uri": "",
+        }
+        for index, fact in enumerate(facts)
+    ]
+
+    evidence_graph = incident_archaeology.build_evidence_graph(snapshots + normalized_facts)
+    hypotheses = incident_archaeology.rank_hypotheses(evidence_graph)
+    contradictions = incident_archaeology.build_contradictions(evidence_graph)
+    disproof_checks = incident_archaeology.build_disproof_checks(hypotheses)
+    recovery_options = incident_archaeology.simulate_recovery_options(hypotheses)
+    confidence = incident_archaeology.compute_confidence(
+        coverage=float(evidence_graph.get("coverage") or 0.0),
+        recency=float(evidence_graph.get("recency") or 0.5),
+        contradiction_count=len(contradictions),
+        evidence_count=len(evidence_graph.get("nodes") or []),
+    )
+
+    lines: list[str] = [
+        f"Incident Packet ({time_window})",
+        f"Question: {normalized_query}",
+        f"Confidence: {confidence:.2f}",
+        "",
+        "Hypotheses:",
+    ]
+    if hypotheses:
+        for hypothesis in hypotheses[:3]:
+            lines.append(
+                f"- #{hypothesis.get('rank')} {hypothesis.get('cause')} "
+                f"(confidence={hypothesis.get('confidence')}, evidence={', '.join(hypothesis.get('supportingEvidenceIds') or []) or 'none'})"
+            )
+    else:
+        lines.append("- No stable hypotheses generated.")
+
+    lines.extend(["", "Recovery Options:"])
+    if recovery_options:
+        for option in recovery_options[:3]:
+            lines.append(
+                f"- {option.get('strategy')}: risk={option.get('risk')}, blast={option.get('blastRadius')}, "
+                f"eta={option.get('estimatedTimeMinutes')}m, commands={', '.join(option.get('commands') or []) or 'none'}"
+            )
+    else:
+        lines.append("- No recovery options generated.")
+
+    lines.extend(["", "Contradictions:"])
+    if contradictions:
+        lines.extend([f"- {item}" for item in contradictions[:5]])
+    else:
+        lines.append("- None observed.")
+
+    lines.extend(["", "Disproof Checks:"])
+    if disproof_checks:
+        lines.extend([f"- {item}" for item in disproof_checks[:5]])
+    else:
+        lines.append("- Add targeted falsification tests for each hypothesis.")
+
+    lines.extend(["", "Evidence IDs:"])
+    evidence_ids = [str(item.get("id")) for item in (evidence_graph.get("nodes") or [])[:8]]
+    lines.append(f"- {', '.join(evidence_ids) if evidence_ids else 'none'}")
+
+    return _trim_to_budget("\n".join(lines), max_tokens=1200)
+
+
+def top_k_from_time_window(time_window: str) -> int:
+    normalized = (time_window or "24h").strip().lower()
+    if normalized in {"1h", "2h", "6h"}:
+        return 4
+    if normalized in {"12h", "24h"}:
+        return 6
+    return 8
 
 
 @mcp.tool()

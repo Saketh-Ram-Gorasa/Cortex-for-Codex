@@ -39,6 +39,39 @@ class VectorDBService:
         self._query_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._cache_ttl_seconds = 30
         self._cache_max_entries = 512
+        self._collection_aliases: dict[str, str] = {}
+
+    def _collection_user_key(self, user_id: str | None) -> str:
+        return user_id or "__default__"
+
+    def _base_collection_name(self, user_id: str | None = None) -> str:
+        return f"snapshots-{user_id}" if user_id else "secondcortex-snapshots"
+
+    def _safe_collection_name(self, name: str) -> str:
+        return str(name or "secondcortex-snapshots")[:63]
+
+    def _is_compactor_metadata_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "backfill request to compactor" in text or "metadata segment" in text
+
+    def _activate_collection_failover(self, user_id: str | None, reason: Exception) -> None:
+        user_key = self._collection_user_key(user_id)
+        base_name = self._base_collection_name(user_id)
+        failover_name = self._safe_collection_name(f"{base_name}-recovery-{int(time.time())}")
+        self._collection_aliases[user_key] = failover_name
+        self._clear_user_cache(user_id)
+        logger.error(
+            "Detected Chroma metadata compactor failure for user=%s. Switching to failover collection '%s'. error=%s",
+            user_id or "default",
+            failover_name,
+            reason,
+        )
+
+    def _with_compactor_recovery(self, user_id: str | None, exc: Exception) -> bool:
+        if not self._is_compactor_metadata_error(exc):
+            return False
+        self._activate_collection_failover(user_id, exc)
+        return True
 
     def _cache_key(
         self,
@@ -116,9 +149,9 @@ class VectorDBService:
         if self.chroma_client is None:
             return None
 
-        collection_name = f"snapshots-{user_id}" if user_id else "secondcortex-snapshots"
-        # ChromaDB collection names must be 3-63 chars, alphanumeric + hyphens
-        collection_name = collection_name[:63]
+        user_key = self._collection_user_key(user_id)
+        collection_name = self._collection_aliases.get(user_key) or self._base_collection_name(user_id)
+        collection_name = self._safe_collection_name(collection_name)
 
         try:
             return self.chroma_client.get_or_create_collection(name=collection_name)
@@ -216,6 +249,25 @@ class VectorDBService:
             self._clear_user_cache(user_id)
             logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                collection = self._get_collection(user_id)
+                if collection is not None:
+                    try:
+                        collection.upsert(
+                            ids=[str(snapshot.id)],
+                            embeddings=[embedding],
+                            metadatas=[metadata],
+                            documents=[str(snapshot.shadow_graph or "")],
+                        )
+                        self._clear_user_cache(user_id)
+                        logger.info(
+                            "Upserted snapshot %s to failover collection for user=%s.",
+                            snapshot.id,
+                            user_id or "default",
+                        )
+                        return
+                    except Exception as retry_exc:
+                        logger.error("Retry upsert to failover collection failed: %s", retry_exc)
             logger.error("Upsert to ChromaDB failed: %s", exc)
 
     async def semantic_search(
@@ -266,6 +318,8 @@ class VectorDBService:
             return fallback
 
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
             logger.error("Semantic search failed: %s", exc)
             fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
             self._cache_set(cache_key, fallback)
@@ -324,6 +378,20 @@ class VectorDBService:
             self._clear_user_cache(user_id)
             return record_id
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                collection = self._get_collection(user_id)
+                if collection is not None:
+                    try:
+                        collection.upsert(
+                            ids=[record_id],
+                            embeddings=[embedding],
+                            metadatas=[metadata],
+                            documents=[record.content],
+                        )
+                        self._clear_user_cache(user_id)
+                        return record_id
+                    except Exception as retry_exc:
+                        logger.error("Retry external upsert to failover collection failed: %s", retry_exc)
             logger.error("External upsert failed: %s", exc)
             return None
 
@@ -380,8 +448,51 @@ class VectorDBService:
             return []
 
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                return []
             logger.error("get_recent_snapshots failed: %s", exc)
             return []
+
+    def get_snapshot_metadatas(
+        self,
+        user_id: str | None = None,
+        *,
+        limit: int = 2500,
+        project_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch raw snapshot metadata with compactor-aware failover recovery."""
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — returning empty metadata list.")
+            return []
+
+        attempted_recovery = False
+        while True:
+            try:
+                total = collection.count() or 0
+                if total <= 0:
+                    return []
+
+                fetch_limit = min(max(1, int(limit)), total)
+                get_kwargs: dict[str, Any] = {
+                    "limit": fetch_limit,
+                    "include": ["metadatas"],
+                }
+                if project_id:
+                    get_kwargs["where"] = {"project_id": str(project_id)}
+
+                result = collection.get(**get_kwargs)
+                metadatas = (result or {}).get("metadatas") or []
+                return [dict(meta) for meta in metadatas if meta]
+            except Exception as exc:
+                if not attempted_recovery and self._with_compactor_recovery(user_id, exc):
+                    collection = self._get_collection(user_id)
+                    if collection is None:
+                        return []
+                    attempted_recovery = True
+                    continue
+                logger.error("get_snapshot_metadatas failed for user=%s: %s", user_id or "default", exc)
+                return []
 
     async def get_snapshot_timeline(
         self,
@@ -425,6 +536,8 @@ class VectorDBService:
             self._cache_set(cache_key, output)
             return output
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                return []
             logger.error("get_snapshot_timeline failed: %s", exc)
             return []
 
@@ -447,6 +560,8 @@ class VectorDBService:
             metadata["document"] = documents[0] if documents else ""
             return metadata
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                return None
             logger.error("get_snapshot_by_id failed for %s: %s", snapshot_id, exc)
             return None
 
@@ -491,6 +606,8 @@ class VectorDBService:
             self._clear_user_cache(user_id)
             return updated_count
         except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                return 0
             logger.error("assign_project_to_user_snapshots failed for user=%s: %s", user_id, exc)
             return 0
 

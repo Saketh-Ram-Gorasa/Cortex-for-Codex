@@ -74,7 +74,12 @@ export default function AuthGate() {
 
     const storedToken = localStorage.getItem('sc_jwt_token');
     if (!storedToken) {
-      router.push('/');
+      if (pmQuery) {
+        const redirect = guestQuery ? '/?pm=true&guest=true' : '/?pm=true';
+        router.push(redirect);
+      } else {
+        router.push('/');
+      }
       setIsChecking(false);
       return;
     }
@@ -373,7 +378,7 @@ export default function AuthGate() {
       <div className="sc-app-topbar">
         <div className="nav-logo">
           Second<span>Cortex</span>
-          {sessionMode === 'pm' && <span className="sc-role-badge">PM</span>}
+          {sessionMode === 'pm' && <span className="sc-role-badge">Team Cortex</span>}
           {sessionMode === 'developer' && isDevGuest && <span className="sc-role-badge">Guest</span>}
         </div>
 
@@ -382,7 +387,7 @@ export default function AuthGate() {
             onClick={() => setActiveTab('dashboard')}
             className={`sc-app-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
           >
-            {sessionMode === 'pm' ? 'PM Dashboard' : 'Dashboard'}
+            {sessionMode === 'pm' ? 'Team Cortex' : 'Dashboard'}
           </button>
           {!isPmGuest && (
             <button
@@ -479,7 +484,7 @@ export default function AuthGate() {
                 <div className="sc-dashboard-panel-inner" style={{ display: 'block' }}>
                   <h2 className="sc-dashboard-h2">Live Context Graph Disabled in PM Guest Mode</h2>
                   <p className="sc-dashboard-p">
-                    Use PM Dashboard to inspect teammate snapshots and compression summaries. Authenticated PM login
+                    Use Team Cortex to inspect teammate snapshots and compression summaries. Authenticated Team Cortex login
                     enables live graph access.
                   </p>
                 </div>

@@ -121,7 +121,19 @@ class Settings(BaseSettings):
     )
     mcp_external_ingestion_enabled: bool = Field(True, validation_alias="MCP_EXTERNAL_INGESTION_ENABLED")
     mcp_external_slack_enabled: bool = Field(False, validation_alias="MCP_EXTERNAL_SLACK_ENABLED")
+    mcp_external_document_enabled: bool = Field(False, validation_alias="MCP_EXTERNAL_DOCUMENT_ENABLED")
     mcp_external_max_messages: int = Field(50, validation_alias="MCP_EXTERNAL_MAX_MESSAGES")
+
+    # Azure AI Document Intelligence (external document ingestion)
+    azure_document_intelligence_endpoint: str = Field(
+        "",
+        validation_alias="AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT",
+    )
+    azure_document_intelligence_key: str = Field("", validation_alias="AZURE_DOCUMENT_INTELLIGENCE_KEY")
+    azure_document_intelligence_model_id: str = Field(
+        "prebuilt-read",
+        validation_alias="AZURE_DOCUMENT_INTELLIGENCE_MODEL_ID",
+    )
 
     # Server
     host: str = "0.0.0.0"

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { BackendClient } from '../backendClient';
+import { BackendClient, IncidentPacketResponse } from '../backendClient';
 import { AuthService } from '../auth/authService';
 
 /**
@@ -70,6 +70,45 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     let sessionId = message.sessionId as string | undefined;
                     this.output.appendLine(`[Sidebar] User asked: ${question} (session: ${sessionId})`);
 
+                    const trimmedQuestion = (question || '').trim();
+                    const addCommandMatch = trimmedQuestion.match(/^\/add\s+([\s\S]+)$/i);
+
+                    if (addCommandMatch) {
+                        const noteBody = addCommandMatch[1].trim();
+                        if (!noteBody) {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Usage: /add <important note>',
+                            });
+                            break;
+                        }
+
+                        if (!sessionId) {
+                            const createdSessionId = await this.backend.createChatSession('Quick Note');
+                            if (createdSessionId) {
+                                sessionId = createdSessionId;
+                                this.postMessage({ type: 'sessionBound', sessionId });
+                            }
+                        }
+
+                        this.postMessage({ type: 'loading' });
+                        const ingested = await this.backend.ingestNote(noteBody, this.getSelectedProjectId?.());
+                        if (ingested) {
+                            this.postMessage({
+                                type: 'answer',
+                                summary: 'Saved note to SecondCortex memory. It is now available for context retrieval and external agent queries.',
+                                commands: [],
+                                sessionId,
+                            });
+                        } else {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Could not ingest note. Make sure backend is running and you are logged in.',
+                            });
+                        }
+                        break;
+                    }
+
                     // Ensure chats are always attached to a session so they appear in "Past Chats".
                     if (!sessionId) {
                         const autoTitle = (question || 'New Chat').trim().slice(0, 48) || 'New Chat';
@@ -98,11 +137,42 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         break;
                     }
 
+                    const incidentIntent = normalized.startsWith('/incident') || normalized.startsWith('incident:');
+                    if (incidentIntent) {
+                        this.postMessage({ type: 'loading' });
+
+                        const cleanedQuestion = question
+                            .replace(/^\s*\/incident\s*/i, '')
+                            .replace(/^\s*incident:\s*/i, '')
+                            .trim() || 'Why did this incident happen?';
+
+                        const incidentPacket = await this.backend.getIncidentPacket(
+                            cleanedQuestion,
+                            this.getSelectedProjectId?.(),
+                            '24h',
+                        );
+
+                        if (incidentPacket) {
+                            this.postMessage({
+                                type: 'answer',
+                                summary: this.formatIncidentPacketResponse(incidentPacket),
+                                commands: [],
+                                sessionId,
+                            });
+                        } else {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Could not load incident packet from backend.',
+                            });
+                        }
+                        break;
+                    }
+
                     this.postMessage({ type: 'loading' });
 
                     const response = await this.backend.askQuestion(question, sessionId);
                     if (response && !(response as any)._error) {
-                        const styledSummary = this.formatAssistantResponse(response.summary, response.commands ?? []);
+                        const styledSummary = this.formatAssistantResponse(response.summary, response.commands ?? [], response.sources ?? []);
                         this.postMessage({
                             type: 'answer',
                             summary: styledSummary,
@@ -118,6 +188,92 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         this.postMessage({
                             type: 'error',
                             message: 'Could not reach the SecondCortex backend. Is it running?',
+                        });
+                    }
+                    break;
+                }
+                case 'addNote': {
+                    const note = (message.note as string || '').trim();
+                    if (!note) {
+                        this.postMessage({ type: 'error', message: 'Note cannot be empty.' });
+                        break;
+                    }
+
+                    this.postMessage({ type: 'loading' });
+                    const ingested = await this.backend.ingestNote(note, this.getSelectedProjectId?.());
+                    if (ingested) {
+                        this.postMessage({
+                            type: 'answer',
+                            summary: 'Saved note to SecondCortex memory. You can also use `/add <note>` from chat for quick capture.',
+                            commands: [],
+                            sessionId: message.sessionId,
+                        });
+                    } else {
+                        this.postMessage({
+                            type: 'error',
+                            message: 'Could not ingest note. Make sure backend is running and you are logged in.',
+                        });
+                    }
+                    break;
+                }
+                case 'uploadDocument': {
+                    const selected = await vscode.window.showOpenDialog({
+                        canSelectMany: false,
+                        openLabel: 'Upload to SecondCortex',
+                        filters: {
+                            'Documents': ['pdf', 'txt', 'md', 'docx'],
+                            'Images': ['png', 'jpg', 'jpeg'],
+                            'All Files': ['*'],
+                        },
+                    });
+
+                    const fileUri = selected?.[0];
+                    if (!fileUri) {
+                        break;
+                    }
+
+                    this.postMessage({ type: 'loading' });
+
+                    try {
+                        const bytes = await vscode.workspace.fs.readFile(fileUri);
+                        const filename = fileUri.path.split('/').pop() || 'document';
+                        const encoded = Buffer.from(bytes).toString('base64');
+
+                        const result = await this.backend.ingestDocument({
+                            filename,
+                            contentBase64: encoded,
+                            domain: 'documentation',
+                            sourceUri: fileUri.toString(),
+                            projectId: this.getSelectedProjectId?.(),
+                        });
+
+                        if (!result) {
+                            this.postMessage({
+                                type: 'error',
+                                message: 'Could not ingest document. Ensure backend flags/config are enabled and retry.',
+                            });
+                            break;
+                        }
+
+                        this.postMessage({
+                            type: 'answer',
+                            summary: [
+                                'Document ingested into SecondCortex memory.',
+                                '',
+                                `- File: ${filename}`,
+                                `- Record ID: ${result.recordId}`,
+                                `- Source Type: ${result.sourceType}`,
+                                `- Confidence: ${Math.round((result.confidence || 0) * 100)}%`,
+                                `- Entities: ${(result.entities || []).slice(0, 8).join(', ') || 'none'}`,
+                            ].join('\n'),
+                            commands: [],
+                            sessionId: message.sessionId,
+                        });
+                    } catch (err) {
+                        this.output.appendLine(`[Sidebar] Upload document failed: ${err}`);
+                        this.postMessage({
+                            type: 'error',
+                            message: 'Could not read or upload the selected document.',
                         });
                     }
                     break;
@@ -162,7 +318,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'selectProject': {
+                    const beforeProjectId = this.getSelectedProjectId?.();
                     await this.onSelectProject?.();
+                    const afterProjectId = this.getSelectedProjectId?.();
+                    if (!afterProjectId) {
+                        this.postMessage({
+                            type: 'error',
+                            message: 'Project was not selected. Make sure you are logged in and have at least one project.',
+                        });
+                    } else if (beforeProjectId !== afterProjectId) {
+                        this.postMessage({
+                            type: 'answer',
+                            summary: `Project selected: ${afterProjectId}`,
+                            commands: [],
+                            sessionId: message.sessionId,
+                        });
+                    }
                     this.postMessage({
                         type: 'projectStatus',
                         projectId: this.getSelectedProjectId?.() || null,
@@ -194,15 +365,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage(message);
     }
 
-    private formatAssistantResponse(summary: string, commands: unknown[]): string {
+    private formatAssistantResponse(
+        summary: string,
+        commands: unknown[],
+        sources: Array<{ type?: string; id?: string; uri?: string }>,
+    ): string {
         const cleanSummary = (summary || '').trim();
         const commandLines = this.buildCommandLines(commands);
+        const sourceLines = this.buildSourceLines(sources);
 
-        if (commandLines.length === 0) {
-            return cleanSummary;
+        const sections: string[] = [];
+        if (cleanSummary) {
+            sections.push(cleanSummary);
+        }
+        if (commandLines.length > 0) {
+            sections.push(`Suggested actions:\n${commandLines.map((line) => `- ${line}`).join('\n')}`);
+        }
+        if (sourceLines.length > 0) {
+            sections.push(`Sources:\n${sourceLines.map((line) => `- ${line}`).join('\n')}`);
         }
 
-        return `${cleanSummary}\n\nSuggested actions:\n${commandLines.map((line) => `- ${line}`).join('\n')}`;
+        return sections.join('\n\n');
     }
 
     private buildCommandLines(commands: unknown[]): string[] {
@@ -232,6 +415,55 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         return lines;
+    }
+
+    private buildSourceLines(sources: Array<{ type?: string; id?: string; uri?: string }>): string[] {
+        const lines: string[] = [];
+
+        for (const source of sources || []) {
+            const sourceType = (source?.type || 'source').trim();
+            const sourceId = (source?.id || '').trim();
+            const sourceUri = (source?.uri || '').trim();
+            const descriptor = sourceId || sourceUri || 'unknown';
+            lines.push(`${sourceType}: ${descriptor}`);
+        }
+
+        return lines;
+    }
+
+    private formatIncidentPacketResponse(packet: IncidentPacketResponse): string {
+        const contradictions = packet.contradictions || [];
+        const disproofChecks = packet.disproofChecks || [];
+        const recovery = packet.recoveryOptions || [];
+
+        const sections: string[] = [
+            `Incident packet: ${packet.incidentId}`,
+            packet.summary || 'No incident summary provided.',
+            `Confidence: ${Math.round((packet.confidence || 0) * 100)}%`,
+        ];
+
+        if (recovery.length > 0) {
+            sections.push(
+                `Recovery options:\n${recovery
+                    .slice(0, 3)
+                    .map((option) => `- ${option.strategy} (risk=${option.risk}, blast=${option.blastRadius}, eta=${option.estimatedTimeMinutes}m)`)
+                    .join('\n')}`,
+            );
+        }
+
+        if (contradictions.length > 0) {
+            sections.push(`Contradictions:\n${contradictions.slice(0, 5).map((item) => `- ${item}`).join('\n')}`);
+        } else {
+            sections.push('Contradictions:\n- none');
+        }
+
+        if (disproofChecks.length > 0) {
+            sections.push(`Disproof checks:\n${disproofChecks.slice(0, 5).map((item) => `- ${item}`).join('\n')}`);
+        } else {
+            sections.push('Disproof checks:\n- add one falsification test per hypothesis');
+        }
+
+        return sections.join('\n\n');
     }
 
     private getHtml(
@@ -476,13 +708,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <title>SecondCortex</title>
     <style>
         :root {
-            --accent: #e5e7eb;
-            --accent-soft: rgba(229, 231, 235, 0.12);
-            --bg: #080808;
-            --surface: #111111;
-            --border: rgba(255, 255, 255, 0.08);
-            --text-main: #f0f0f0;
-            --text-dim: rgba(255,255,255,0.55);
+            --accent: var(--vscode-button-background);
+            --accent-foreground: var(--vscode-button-foreground);
+            --accent-hover: var(--vscode-button-hoverBackground);
+            --bg: var(--vscode-editor-background);
+            --surface: var(--vscode-sideBar-background);
+            --border: var(--vscode-panel-border);
+            --text-main: var(--vscode-foreground);
+            --text-dim: var(--vscode-descriptionForeground);
+            --input-bg: var(--vscode-input-background);
+            --input-fg: var(--vscode-input-foreground);
+            --input-border: var(--vscode-input-border);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -496,7 +732,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             flex-direction: column;
             height: 100vh;
             overflow: hidden;
-            background-image: radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.04), transparent 50%);
         }
 
         /* ── Header ────────────────────────────────────────── */
@@ -504,8 +739,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 16px;
-            background: rgba(17, 17, 17, 0.95);
+            padding: 12px;
+            background: var(--surface);
             border-bottom: 1px solid var(--border);
             z-index: 20;
         }
@@ -517,40 +752,82 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             text-transform: uppercase;
         }
         .header-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
+            position: relative;
         }
 
         /* ── Action Buttons ────────────────────────────────── */
         .icon-btn {
-            background: rgba(255, 255, 255, 0.03);
+            background: transparent;
             border: 1px solid var(--border);
             color: var(--text-dim);
-            padding: 6px 10px;
+            padding: 6px 9px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 11px;
             font-weight: 600;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: background 0.15s ease, color 0.15s ease;
             display: flex;
             align-items: center;
             gap: 4px;
         }
         .icon-btn:hover {
-            color: #fff;
-            background: rgba(255, 255, 255, 0.08);
-            border-color: rgba(255, 255, 255, 0.2);
-            transform: translateY(-1px);
+            color: var(--text-main);
+            background: color-mix(in srgb, var(--text-main) 8%, transparent);
         }
         .icon-btn.primary {
-            background: var(--accent-soft);
-            border-color: rgba(255, 255, 255, 0.22);
-            color: var(--text-main);
+            background: var(--accent);
+            color: var(--accent-foreground);
+            border-color: transparent;
         }
         .icon-btn.primary:hover {
-            background: var(--accent);
-            color: #0b0b0b;
+            background: var(--accent-hover);
+            color: var(--accent-foreground);
+        }
+
+        .menu-btn {
+            min-width: 32px;
+            justify-content: center;
+            font-size: 16px;
+            line-height: 1;
+            padding: 4px 8px;
+        }
+
+        .header-menu {
+            position: absolute;
+            top: 36px;
+            right: 0;
+            min-width: 170px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+            display: none;
+            z-index: 45;
+            overflow: hidden;
+        }
+
+        .header-menu.open {
+            display: block;
+        }
+
+        .menu-item {
+            width: 100%;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-main);
+            text-align: left;
+            padding: 9px 11px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .menu-item:last-child {
+            border-bottom: none;
+        }
+
+        .menu-item:hover {
+            background: color-mix(in srgb, var(--text-main) 8%, transparent);
         }
 
         /* ── History Panel ─────────────────────────────────── */
@@ -580,19 +857,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         .history-item {
             padding: 12px;
-            background: rgba(255, 255, 255, 0.03);
+            background: transparent;
             border: 1px solid var(--border);
             border-radius: 8px;
             cursor: pointer;
             transition: all 0.2s;
         }
         .history-item:hover {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: var(--accent);
+            background: color-mix(in srgb, var(--text-main) 8%, transparent);
         }
         .history-item.active {
             border-color: var(--accent);
-            background: var(--accent-soft);
+            background: color-mix(in srgb, var(--accent) 18%, transparent);
         }
         .history-item-title {
             font-size: 13px;
@@ -626,11 +902,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             display: flex;
             flex-direction: column;
             max-width: 90%;
-            animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        @keyframes slideUp {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
         }
 
         .msg-wrapper.user { align-self: flex-end; }
@@ -682,8 +953,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             white-space: pre;
         }
         .user .msg {
-            background: #e5e7eb;
-            color: #0b0b0b;
+            background: color-mix(in srgb, var(--accent) 88%, white 12%);
+            color: var(--accent-foreground);
             border-bottom-right-radius: 2px;
             box-shadow: none;
         }
@@ -716,28 +987,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         /* ── Input Area ────────────────────────────────────── */
         .footer {
-            padding: 16px;
-            background: rgba(17, 17, 17, 0.95);
+            padding: 12px;
+            background: var(--surface);
             border-top: 1px solid var(--border);
         }
         .input-container {
             position: relative;
             display: flex;
-            background: rgba(0, 0, 0, 0.2);
-            border: 1px solid var(--border);
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
             border-radius: 10px;
             padding: 4px;
             transition: all 0.2s;
         }
         .input-container:focus-within {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+        }
+        #attach-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            border-radius: 7px;
+            width: 34px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #attach-btn:hover {
+            background: color-mix(in srgb, var(--text-main) 10%, transparent);
+            color: var(--text-main);
         }
         #question-input {
             flex: 1;
             background: transparent;
             border: none;
-            color: var(--text-main);
+            color: var(--input-fg);
             padding: 8px 12px;
             font-size: 13px;
             outline: none;
@@ -745,20 +1029,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         #send-btn {
             background: var(--accent);
-            color: #0b0b0b;
+            color: var(--accent-foreground);
             border: none;
             border-radius: 7px;
             padding: 0 14px;
             font-size: 13px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: background 0.15s ease;
         }
         #send-btn:hover {
-            transform: scale(1.02);
-            filter: brightness(1.1);
+            background: var(--accent-hover);
         }
-        #send-btn:active { transform: scale(0.98); }
         #send-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
@@ -814,6 +1096,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             padding: 8px 10px;
             font-size: 11px;
         }
+
+        .slash-hint {
+            margin-top: 7px;
+            font-size: 10px;
+            color: var(--text-dim);
+            text-align: left;
+            padding-left: 2px;
+        }
     </style>
 </head>
 <body>
@@ -826,10 +1116,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             </div>
         </div>
         <div class="header-actions">
-            <button class="icon-btn" onclick="toggleHistory()">History</button>
-            <button class="icon-btn primary" onclick="startNewChat()">New Chat</button>
-            <button class="icon-btn" onclick="selectProject()">My Projects</button>
-            <button class="icon-btn" onclick="doLogout()">Logout</button>
+            <button class="icon-btn menu-btn" id="menu-btn" onclick="toggleMenu()" title="Menu">⋯</button>
+            <div class="header-menu" id="header-menu">
+                <button class="menu-item" onclick="startNewChat()">New Chat</button>
+                <button class="menu-item" onclick="toggleHistory()">History</button>
+                <button class="menu-item" onclick="insertAddNote()">Add Note (/add)</button>
+                <button class="menu-item" onclick="selectProject()">My Projects</button>
+                <button class="menu-item" onclick="doLogout()">Logout</button>
+            </div>
         </div>
     </div>
 
@@ -848,9 +1142,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     
     <div class="footer">
         <div class="input-container">
-            <input id="question-input" type="text" placeholder="Explain your code architecture..." autocomplete="off" />
+            <button id="attach-btn" onclick="uploadDocument()" title="Attach document" aria-label="Attach document">📎</button>
+            <input id="question-input" type="text" placeholder="Ask or use /add <note>..." autocomplete="off" />
             <button id="send-btn">Ask</button>
         </div>
+        <div class="slash-hint">Tip: use <strong>/add your note</strong> to save notes directly from chat.</div>
         <div style="text-align: center; margin-top: 8px;">
             <span class="user-info">Logged in as ${displayName}</span>
         </div>
@@ -867,6 +1163,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         const chatLog = document.getElementById('chat-log');
         const input = document.getElementById('question-input');
         const sendBtn = document.getElementById('send-btn');
+        const headerMenu = document.getElementById('header-menu');
         const historyPanel = document.getElementById('history-panel');
         const historyList = document.getElementById('history-list');
 
@@ -996,14 +1293,35 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         function toggleHistory() {
+            closeMenu();
             historyPanel.classList.toggle('open');
             if (historyPanel.classList.contains('open')) {
                 vscode.postMessage({ type: 'getSessions' });
             }
         }
 
+        function toggleMenu() {
+            headerMenu.classList.toggle('open');
+        }
+
+        function closeMenu() {
+            headerMenu.classList.remove('open');
+        }
+
         function startNewChat() {
+            closeMenu();
             vscode.postMessage({ type: 'newChat', title: 'New Chat' });
+        }
+
+        function insertAddNote() {
+            closeMenu();
+            input.value = '/add ';
+            input.focus();
+        }
+
+        function uploadDocument() {
+            closeMenu();
+            vscode.postMessage({ type: 'uploadDocument', sessionId: state.sessionId });
         }
 
         function loadSession(id) {
@@ -1044,6 +1362,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         function doLogout() {
+            closeMenu();
             vscode.postMessage({ type: 'logout' });
         }
 
@@ -1052,8 +1371,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         function selectProject() {
+            closeMenu();
             vscode.postMessage({ type: 'selectProject' });
         }
+
+        document.addEventListener('click', (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+            if (!target.closest('.header-actions')) {
+                closeMenu();
+            }
+        });
 
         sendBtn.addEventListener('click', send);
         input.addEventListener('keydown', (e) => {

@@ -18,6 +18,7 @@ import os
 import re
 import json
 import asyncio
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -52,6 +53,8 @@ from models import schemas
 from models.schemas import (
     QueryRequest,
     QueryResponse,
+    IncidentPacketRequest,
+    IncidentPacketResponse,
     ResurrectionRequest,
     ResurrectionResponse,
     ResurrectionCommand,
@@ -71,6 +74,9 @@ from auth.routes import user_db
 from services.vector_db import VectorDBService
 from services.llm_client import task_chat_completion, validate_llm_configuration
 from services.git_ingest import RetroGitIngestionService
+from services.external_ingest import ExternalIngestionService
+from services.azure_document_intelligence import AzureDocumentIntelligenceService
+from services.incident_archaeology import IncidentArchaeologyService
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -145,6 +151,8 @@ planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 simulator = SimulatorAgent()
 git_ingestion = RetroGitIngestionService()
+external_ingest = ExternalIngestionService()
+incident_archaeology = IncidentArchaeologyService()
 
 
 def _parse_terminal_commands(value: Any) -> list[str]:
@@ -282,6 +290,88 @@ def _extract_relevant_commands(snapshots: list[dict]) -> list[str]:
             if cmd not in commands:
                 commands.append(cmd)
     return commands[:6]
+
+
+def _coerce_query_response(response_obj: Any) -> QueryResponse:
+    if isinstance(response_obj, QueryResponse):
+        return response_obj
+    if isinstance(response_obj, dict):
+        return QueryResponse(**response_obj)
+    return QueryResponse(summary=str(response_obj or ""))
+
+
+def _infer_document_content_type(filename: str) -> str:
+    lowered = (filename or "").strip().lower()
+    if lowered.endswith(".pdf"):
+        return "application/pdf"
+    if lowered.endswith(".png"):
+        return "image/png"
+    if lowered.endswith(".jpg") or lowered.endswith(".jpeg"):
+        return "image/jpeg"
+    return "application/octet-stream"
+
+
+async def _build_incident_packet(
+    *,
+    question: str,
+    user_id: str,
+    project_id: str | None,
+    time_window: str,
+) -> dict[str, Any]:
+    plan = incident_archaeology.build_investigation_plan(
+        question=question,
+        project_id=project_id,
+        time_window=time_window,
+    )
+    planner_result = await planner.plan(question, user_id=user_id)
+
+    snapshots = list(planner_result.retrieved_context or [])
+    facts = await vector_db.recall_facts(question, top_k=3, user_id=user_id, min_salience=0.3)
+
+    normalized_facts: list[dict[str, Any]] = []
+    for idx, fact in enumerate(facts):
+        normalized_facts.append(
+            {
+                "id": str(fact.get("id") or f"fact_{idx + 1}"),
+                "active_file": f"fact://{fact.get('kind') or 'memory'}",
+                "git_branch": "knowledge",
+                "timestamp": str(fact.get("created_at") or datetime.now(timezone.utc).isoformat()),
+                "summary": str(fact.get("document") or fact.get("content") or ""),
+                "source_type": "fact",
+                "source_id": str(fact.get("id") or ""),
+                "source_uri": "",
+            }
+        )
+
+    evidence_graph = incident_archaeology.build_evidence_graph(snapshots + normalized_facts)
+    hypotheses = incident_archaeology.rank_hypotheses(evidence_graph)
+    contradictions = incident_archaeology.build_contradictions(evidence_graph)
+    confidence = incident_archaeology.compute_confidence(
+        coverage=float(evidence_graph.get("coverage") or 0.0),
+        recency=float(evidence_graph.get("recency") or 0.5),
+        contradiction_count=len(contradictions),
+        evidence_count=len(evidence_graph.get("nodes") or []),
+    )
+    recovery_options = incident_archaeology.simulate_recovery_options(hypotheses, simulator_agent=simulator)
+    disproof_checks = incident_archaeology.build_disproof_checks(hypotheses)
+
+    top_causes = ", ".join([str(h.get("cause") or "unknown") for h in hypotheses[:2]]) or "unknown cause"
+    summary = (
+        f"Likely incident drivers: {top_causes}. "
+        f"Evidence nodes: {len(evidence_graph.get('nodes') or [])}. "
+        f"Investigation scope: {plan.get('time_window')}."
+    )
+
+    return {
+        "incidentId": f"inc_{int(datetime.now(timezone.utc).timestamp())}",
+        "summary": summary,
+        "confidence": confidence,
+        "hypotheses": hypotheses,
+        "recoveryOptions": recovery_options,
+        "contradictions": contradictions,
+        "evidenceNodes": evidence_graph.get("nodes") or [],
+        "disproofChecks": disproof_checks,
+    }
 
 
 async def _synthesize_decision_history(
@@ -822,7 +912,23 @@ async def handle_query(
         retrieved_snapshots = [{"id": item.get("id"), "timestamp": item.get("timestamp"), "file": item.get("activeFile"), "branch": item.get("gitBranch")} for item in plan_result.retrieved_context[:5]]
 
         # Step 3: Execute — synthesize and validate
-        response = await executor.synthesize(req.question, plan_result)
+        response = _coerce_query_response(await executor.synthesize(req.question, plan_result))
+
+        existing_sources = list(getattr(response, "sources", []) or [])
+        if not existing_sources:
+            source_candidates: list[dict[str, Any]] = []
+            for item in plan_result.retrieved_context[:8]:
+                source_type = str(item.get("source_type") or "").strip()
+                if not source_type:
+                    continue
+                source_candidates.append(
+                    {
+                        "type": source_type,
+                        "id": str(item.get("source_id") or item.get("id") or ""),
+                        "uri": str(item.get("source_uri") or ""),
+                    }
+                )
+            response.sources = source_candidates
 
         # Step 4: Enrich response with retrieved facts and snapshots
         response.retrieved_facts = retrieved_facts
@@ -872,7 +978,7 @@ async def handle_pm_query(
         logger.info("PM query received: %s (user=%s)", req.question, user_id)
 
         plan_result = await planner.plan(req.question, user_id=user_id)
-        response = await executor.synthesize(req.question, plan_result)
+        response = _coerce_query_response(await executor.synthesize(req.question, plan_result))
 
         # Restricted guest tokens should not persist into standard user chat history.
         if role != "pm_guest":
@@ -895,6 +1001,89 @@ async def handle_pm_query(
 
         logger.error("PM QUERY PIPELINE CRASH: %s\n%s", exc, err)
         raise HTTPException(status_code=500, detail=f"PM query pipeline error: {str(exc)}")
+
+
+@app.post("/api/v1/incident/packet", response_model=IncidentPacketResponse)
+async def handle_incident_packet(
+    req: IncidentPacketRequest,
+    user_id: str = Depends(get_current_user),
+):
+    if req.project_id:
+        _require_project_access(user_id=user_id, project_id=req.project_id)
+
+    payload = await _build_incident_packet(
+        question=req.question,
+        user_id=user_id,
+        project_id=req.project_id,
+        time_window=req.time_window,
+    )
+    return IncidentPacketResponse(**payload)
+
+
+@app.post("/api/v1/ingest/document", response_model=schemas.DocumentIngestResponse)
+async def ingest_document(
+    req: schemas.DocumentIngestRequest,
+    user_id: str = Depends(get_current_user),
+):
+    if not bool(settings.mcp_external_ingestion_enabled):
+        raise HTTPException(status_code=403, detail="External ingestion is disabled by server policy.")
+    if not bool(settings.mcp_external_document_enabled):
+        raise HTTPException(status_code=403, detail="Document ingestion is disabled by server policy.")
+
+    normalized_filename = (req.filename or "").strip()
+    normalized_domain = (req.domain or "").strip()
+    normalized_payload = (req.content_base64 or "").strip()
+    if not normalized_filename or not normalized_domain or not normalized_payload:
+        raise HTTPException(status_code=400, detail="filename, contentBase64, and domain are required.")
+
+    try:
+        content_bytes = base64.b64decode(normalized_payload, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="contentBase64 must be valid base64-encoded bytes.")
+
+    extractor = AzureDocumentIntelligenceService(
+        endpoint=settings.azure_document_intelligence_endpoint,
+        api_key=settings.azure_document_intelligence_key,
+        model_id=settings.azure_document_intelligence_model_id,
+    )
+    extraction = extractor.extract_text_from_bytes(
+        content_bytes,
+        mime_type=_infer_document_content_type(normalized_filename),
+    )
+    if extraction.get("error"):
+        raise HTTPException(status_code=400, detail=str(extraction.get("error")))
+
+    extracted_text = str(extraction.get("text") or "").strip()
+    if not extracted_text:
+        raise HTTPException(status_code=400, detail="Document extraction returned empty text.")
+
+    record = external_ingest.build_document_record(
+        source_name=normalized_filename,
+        source_uri=(req.source_uri or "").strip(),
+        domain=normalized_domain,
+        extracted_text=extracted_text,
+        project_id=req.project_id,
+    )
+
+    extracted_confidence = extraction.get("confidence")
+    if isinstance(extracted_confidence, (int, float)):
+        record.confidence_score = max(0.0, min(float(extracted_confidence), 1.0))
+
+    reconciled = external_ingest.reconcile_records([record])
+    if not reconciled:
+        raise HTTPException(status_code=400, detail="No ingestible records found after reconciliation.")
+
+    record_id = await vector_db.upsert_external_record(reconciled[0], user_id=user_id)
+    if not record_id:
+        raise HTTPException(status_code=500, detail="Failed to persist document record.")
+
+    return schemas.DocumentIngestResponse(
+        status="ok",
+        recordId=record_id,
+        sourceType=reconciled[0].source_type,
+        confidence=float(reconciled[0].confidence_score),
+        entities=reconciled[0].entities,
+    )
 
 
 @app.post("/api/v1/resurrect", response_model=ResurrectionResponse)

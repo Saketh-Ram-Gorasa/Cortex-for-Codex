@@ -2,7 +2,7 @@
   "name": "secondcortex",
   "displayName": "SecondCortex",
   "description": "Your AI-Powered Second Brain for Development Context — tracks IDE activity, enforces a Semantic Firewall, and enables Workspace Resurrection.",
-  "version": "0.1.10",
+  "version": "0.1.12",
   "publisher": "secondcortex-labs",
   "repository": {
     "type": "git",

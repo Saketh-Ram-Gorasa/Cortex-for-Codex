@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime
@@ -61,6 +62,28 @@ Rules:
 """
 
 
+NOTE_STRUCTURER_SYSTEM_PROMPT = """\
+You are a strict note-structuring assistant for developer memory.
+
+Given a raw note, return ONLY valid JSON with this exact schema:
+{
+    "title": "short title",
+    "tags": ["tag1", "tag2"],
+    "body": "normalized paragraph text",
+    "summary": "one-sentence summary",
+    "entities": ["EntityA", "EntityB"]
+}
+
+Rules:
+- title: 3-8 words, concise, no punctuation suffix.
+- tags: 1-8 lowercase snake_case tags.
+- body: preserve technical meaning, remove filler, keep under 1200 chars.
+- summary: under 20 words, present tense.
+- entities: 0-8 high-signal terms (services, files, symbols, tools).
+- Return JSON only, no markdown.
+"""
+
+
 class RetrieverAgent:
     """Processes IDE snapshots in the background."""
 
@@ -78,6 +101,8 @@ class RetrieverAgent:
         2. If ADD or UPDATE → extract metadata → generate embedding → store.
         """
         logger.info("Processing snapshot for %s (user=%s)", payload.active_file, user_id or "default")
+
+        payload = await self._structure_manual_note_payload(payload)
 
         # ── Step 1: Route the memory operation ──────────────────
         user_key = user_id or "__anonymous__"
@@ -135,6 +160,169 @@ class RetrieverAgent:
         # Remember the latest snapshot for this user
         self._previous_snapshots[user_key] = stored
         return stored
+
+    def _is_manual_note_snapshot(self, payload: SnapshotPayload) -> bool:
+        function_context = payload.function_context or {}
+        return str(function_context.get("source") or "").strip().lower() == "manual_note"
+
+    def _extract_manual_note_text(self, shadow_graph: str) -> str:
+        text = (shadow_graph or "").strip()
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered.startswith("developer note:"):
+            return text.split(":", 1)[1].strip()
+        return text
+
+    def _normalize_tag(self, value: str) -> str:
+        cleaned = re.sub(r"[^a-z0-9_]+", "_", (value or "").strip().lower())
+        cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+        return cleaned
+
+    def _derive_fallback_title(self, note_text: str) -> str:
+        words = re.findall(r"[A-Za-z0-9_]+", note_text)
+        if not words:
+            return "Developer Note"
+        return " ".join(words[:6]).strip().title() or "Developer Note"
+
+    def _derive_fallback_tags(self, note_text: str, function_context: dict[str, object]) -> list[str]:
+        tags: list[str] = []
+        note_entities = function_context.get("noteEntities")
+        if isinstance(note_entities, list):
+            for item in note_entities:
+                if isinstance(item, str):
+                    normalized = self._normalize_tag(item)
+                    if normalized:
+                        tags.append(normalized)
+
+        hashtags = re.findall(r"#([A-Za-z0-9_-]+)", note_text)
+        for hashtag in hashtags:
+            normalized = self._normalize_tag(hashtag)
+            if normalized:
+                tags.append(normalized)
+
+        deduped: list[str] = []
+        for tag in tags:
+            if tag and tag not in deduped:
+                deduped.append(tag)
+
+        return deduped[:8] or ["note"]
+
+    def _fallback_manual_note_structure(self, note_text: str, function_context: dict[str, object]) -> dict[str, object]:
+        title = self._derive_fallback_title(note_text)
+        tags = self._derive_fallback_tags(note_text, function_context)
+        body = note_text.strip()[:1200]
+        summary = body[:160].strip() or title
+        entities = [tag for tag in tags if tag != "note"][:8]
+        return {
+            "title": title,
+            "tags": tags,
+            "body": body,
+            "summary": summary,
+            "entities": entities,
+            "structuredBy": "fallback",
+        }
+
+    def _parse_json_payload(self, raw: str) -> dict[str, object]:
+        text = (raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+            text = re.sub(r"```$", "", text).strip()
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("Expected JSON object")
+        return parsed
+
+    async def _llm_structure_manual_note(self, note_text: str) -> dict[str, object]:
+        response = await task_chat_completion(
+            task="retriever",
+            messages=[
+                {"role": "system", "content": NOTE_STRUCTURER_SYSTEM_PROMPT},
+                {"role": "user", "content": note_text},
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+        raw = response.choices[0].message.content or "{}"
+        data = self._parse_json_payload(raw)
+
+        title = str(data.get("title") or "").strip()
+        body = str(data.get("body") or "").strip()
+        summary = str(data.get("summary") or "").strip()
+
+        tags_raw = data.get("tags")
+        tags: list[str] = []
+        if isinstance(tags_raw, list):
+            for item in tags_raw:
+                if isinstance(item, str):
+                    normalized = self._normalize_tag(item)
+                    if normalized:
+                        tags.append(normalized)
+        tags = list(dict.fromkeys(tags))[:8]
+
+        entities_raw = data.get("entities")
+        entities: list[str] = []
+        if isinstance(entities_raw, list):
+            for item in entities_raw:
+                if isinstance(item, str):
+                    normalized = item.strip()
+                    if normalized:
+                        entities.append(normalized)
+        entities = list(dict.fromkeys(entities))[:8]
+
+        if not body:
+            raise ValueError("Structured note body is empty")
+
+        return {
+            "title": title or self._derive_fallback_title(note_text),
+            "tags": tags or ["note"],
+            "body": body[:1200],
+            "summary": summary or body[:160],
+            "entities": entities,
+            "structuredBy": "llm",
+        }
+
+    async def _structure_manual_note_payload(self, payload: SnapshotPayload) -> SnapshotPayload:
+        if not self._is_manual_note_snapshot(payload):
+            return payload
+
+        raw_note = self._extract_manual_note_text(payload.shadow_graph)
+        if not raw_note:
+            return payload
+
+        context = dict(payload.function_context or {})
+        try:
+            structured = await self._llm_structure_manual_note(raw_note)
+        except Exception as exc:
+            logger.warning("Manual note structuring failed; using fallback. error=%s", exc)
+            structured = self._fallback_manual_note_structure(raw_note, context)
+
+        title = str(structured.get("title") or "Developer Note").strip()
+        tags = [str(tag).strip() for tag in (structured.get("tags") or []) if str(tag).strip()][:8]
+        body = str(structured.get("body") or raw_note).strip()
+        summary = str(structured.get("summary") or body[:160]).strip()
+        entities = [str(entity).strip() for entity in (structured.get("entities") or []) if str(entity).strip()][:8]
+        structured_by = str(structured.get("structuredBy") or "fallback").strip()
+
+        payload.shadow_graph = (
+            "Structured developer note:\n"
+            f"Title: {title}\n"
+            f"Tags: {', '.join(tags) if tags else 'note'}\n"
+            "Body:\n"
+            f"{body}"
+        )
+
+        context["noteTitle"] = title
+        context["noteTags"] = tags
+        context["noteBody"] = body
+        context["noteSummary"] = summary
+        existing_entities_raw = context.get("noteEntities")
+        existing_entities = existing_entities_raw if isinstance(existing_entities_raw, list) else []
+        merged_entities = [*existing_entities, *entities]
+        context["noteEntities"] = list(dict.fromkeys([str(item).strip() for item in merged_entities if str(item).strip()]))[:12]
+        context["noteStructuredBy"] = structured_by
+        payload.function_context = context
+        return payload
 
     async def _route_operation(self, payload: SnapshotPayload, previous: StoredSnapshot | None = None) -> MemoryMetadata:
         """Call GPT-4o to decide the memory operation."""

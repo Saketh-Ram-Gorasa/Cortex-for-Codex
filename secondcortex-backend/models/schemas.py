@@ -177,6 +177,65 @@ class QueryRequest(BaseModel):
     question: str
 
 
+class IncidentPacketRequest(BaseModel):
+    question: str
+    project_id: str | None = Field(None, alias="projectId")
+    time_window: str = Field("24h", alias="timeWindow")
+
+    model_config = {"populate_by_name": True}
+
+
+class IncidentHypothesis(BaseModel):
+    id: str
+    rank: int
+    cause: str
+    confidence: float
+    supporting_evidence_ids: list[str] = Field(default_factory=list, alias="supportingEvidenceIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class IncidentRecoveryOption(BaseModel):
+    strategy: str
+    risk: str
+    blast_radius: str = Field(..., alias="blastRadius")
+    estimated_time_minutes: int = Field(..., alias="estimatedTimeMinutes")
+    commands: list[str] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+
+class IncidentContradiction(BaseModel):
+    evidence_a_id: str = Field(..., alias="evidenceAId")
+    evidence_b_id: str = Field(..., alias="evidenceBId")
+    note: str
+
+    model_config = {"populate_by_name": True}
+
+
+class IncidentEvidenceNode(BaseModel):
+    id: str
+    type: str
+    timestamp: str
+    file: str
+    branch: str
+    summary: str
+    source: str
+
+
+class IncidentPacketResponse(BaseModel):
+    incident_id: str = Field(..., alias="incidentId")
+    summary: str
+    confidence: float
+    hypotheses: list[IncidentHypothesis] = Field(default_factory=list)
+    recovery_options: list[IncidentRecoveryOption] = Field(default_factory=list, alias="recoveryOptions")
+    contradictions: list[str] = Field(default_factory=list)
+    evidence_nodes: list[IncidentEvidenceNode] = Field(default_factory=list, alias="evidenceNodes")
+    disproof_checks: list[str] = Field(default_factory=list, alias="disproofChecks")
+
+    model_config = {"populate_by_name": True}
+
+
 class ResurrectionCommand(BaseModel):
     type: str  # git_stash, git_checkout, open_file, split_terminal, run_command, open_workspace
     branch: str | None = None
@@ -191,8 +250,29 @@ class QueryResponse(BaseModel):
     summary: str
     reasoningLog: list[str] = Field(default_factory=list, alias="reasoningLog")
     commands: list[ResurrectionCommand] = Field(default_factory=list)
+    sources: list[dict[str, Any]] = Field(default_factory=list)
     retrieved_facts: list[dict] = Field(default_factory=list, alias="retrievedFacts")
     retrieved_snapshots: list[dict] = Field(default_factory=list, alias="retrievedSnapshots")
+
+    model_config = {"populate_by_name": True}
+
+
+class DocumentIngestRequest(BaseModel):
+    filename: str
+    content_base64: str = Field(..., alias="contentBase64")
+    domain: str
+    source_uri: str | None = Field(None, alias="sourceUri")
+    project_id: str | None = Field(None, alias="projectId")
+
+    model_config = {"populate_by_name": True}
+
+
+class DocumentIngestResponse(BaseModel):
+    status: str
+    record_id: str = Field(..., alias="recordId")
+    source_type: str = Field(..., alias="sourceType")
+    confidence: float = 0.0
+    entities: list[str] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 

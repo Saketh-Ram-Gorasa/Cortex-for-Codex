@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import IncidentDebugGraph, { type IncidentPacket } from "@/components/testing/IncidentDebugGraph";
 
 type SandboxData = {
   mock_id: string;
@@ -53,6 +54,7 @@ function generateDryRunCommands(snapshot: SandboxData): string[] {
 }
 
 export default function TestingSandbox() {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://sc-backend-suhaan.azurewebsites.net";
   const [mockData, setMockData] = useState<SandboxData>(DEFAULT_MOCK);
   const [mockEditor, setMockEditor] = useState(JSON.stringify(DEFAULT_MOCK, null, 2));
   const [swarmStep, setSwarmStep] = useState(0);
@@ -62,6 +64,11 @@ export default function TestingSandbox() {
   );
   const [redacted, setRedacted] = useState("");
   const [dryRunCommands, setDryRunCommands] = useState<string[]>([]);
+  const [incidentQuestion, setIncidentQuestion] = useState("Why auth failed after deploy?");
+  const [incidentTimeWindow, setIncidentTimeWindow] = useState("24h");
+  const [incidentLoading, setIncidentLoading] = useState(false);
+  const [incidentError, setIncidentError] = useState("");
+  const [incidentPacket, setIncidentPacket] = useState<IncidentPacket | null>(null);
 
   const plannerOutput = useMemo(() => {
     return [
@@ -108,6 +115,42 @@ export default function TestingSandbox() {
 
   const runEmergencyHotfix = () => {
     setDryRunCommands(generateDryRunCommands(mockData));
+  };
+
+  const loadIncidentPacket = async () => {
+    setIncidentLoading(true);
+    setIncidentError("");
+
+    try {
+      const token = localStorage.getItem("sc_jwt_token") || "";
+      if (!token) {
+        setIncidentError("Please log in first so /testing can call the protected incident endpoint.");
+        setIncidentLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${backendUrl}/api/v1/incident/packet`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ question: incidentQuestion, timeWindow: incidentTimeWindow }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Request failed with status ${response.status}`);
+      }
+
+      const payload = (await response.json()) as IncidentPacket;
+      setIncidentPacket(payload);
+    } catch (error) {
+      setIncidentPacket(null);
+      setIncidentError(error instanceof Error ? error.message : "Failed to load incident packet.");
+    } finally {
+      setIncidentLoading(false);
+    }
   };
 
   return (
@@ -233,6 +276,31 @@ export default function TestingSandbox() {
         </section>
 
         <section className="sc-guide-card" style={{ textAlign: "center", display: "grid", gap: 10 }}>
+          <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
+            <h2 className="sc-dashboard-h2">4. Incident Packet Query</h2>
+            <p className="sc-dashboard-p">Fetch a real incident packet and render evidence, hypotheses, and recovery simulation.</p>
+            <textarea
+              value={incidentQuestion}
+              onChange={(e) => setIncidentQuestion(e.target.value)}
+              style={{ width: "100%", minHeight: 90 }}
+            />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <label className="sc-auth-sub" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                Time Window
+                <select value={incidentTimeWindow} onChange={(e) => setIncidentTimeWindow(e.target.value)}>
+                  <option value="6h">6h</option>
+                  <option value="24h">24h</option>
+                  <option value="72h">72h</option>
+                </select>
+              </label>
+              <button className="btn-primary" type="button" onClick={loadIncidentPacket} disabled={incidentLoading}>
+                {incidentLoading ? "Loading Incident Packet..." : "Load Incident Packet"}
+              </button>
+            </div>
+            {incidentError ? <p className="sc-auth-sub">{incidentError}</p> : null}
+          </div>
+          {incidentPacket ? <IncidentDebugGraph packet={incidentPacket} /> : null}
+
           <Link href="/testing/readme" className="btn-primary" style={{ textDecoration: "none", display: "inline-block" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
