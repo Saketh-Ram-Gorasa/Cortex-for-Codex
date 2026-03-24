@@ -274,18 +274,8 @@ class SummaryService:
         return None
 
     def _get_user_vector_activity(self, user_id: str) -> list[dict]:
-        collection = self.vector_db._get_collection(user_id)
-        if collection is None:
-            return []
-
         try:
-            total = collection.count() or 0
-            if total <= 0:
-                return []
-
-            fetch_limit = min(total, 2500)
-            result = collection.get(limit=fetch_limit, include=["metadatas"])
-            metadatas = (result or {}).get("metadatas") or []
+            metadatas = self.vector_db.get_snapshot_metadatas(user_id=user_id, limit=2500)
 
             activity: list[dict] = []
             for meta in metadatas:

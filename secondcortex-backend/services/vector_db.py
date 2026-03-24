@@ -453,6 +453,47 @@ class VectorDBService:
             logger.error("get_recent_snapshots failed: %s", exc)
             return []
 
+    def get_snapshot_metadatas(
+        self,
+        user_id: str | None = None,
+        *,
+        limit: int = 2500,
+        project_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch raw snapshot metadata with compactor-aware failover recovery."""
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — returning empty metadata list.")
+            return []
+
+        attempted_recovery = False
+        while True:
+            try:
+                total = collection.count() or 0
+                if total <= 0:
+                    return []
+
+                fetch_limit = min(max(1, int(limit)), total)
+                get_kwargs: dict[str, Any] = {
+                    "limit": fetch_limit,
+                    "include": ["metadatas"],
+                }
+                if project_id:
+                    get_kwargs["where"] = {"project_id": str(project_id)}
+
+                result = collection.get(**get_kwargs)
+                metadatas = (result or {}).get("metadatas") or []
+                return [dict(meta) for meta in metadatas if meta]
+            except Exception as exc:
+                if not attempted_recovery and self._with_compactor_recovery(user_id, exc):
+                    collection = self._get_collection(user_id)
+                    if collection is None:
+                        return []
+                    attempted_recovery = True
+                    continue
+                logger.error("get_snapshot_metadatas failed for user=%s: %s", user_id or "default", exc)
+                return []
+
     async def get_snapshot_timeline(
         self,
         limit: int = 200,
