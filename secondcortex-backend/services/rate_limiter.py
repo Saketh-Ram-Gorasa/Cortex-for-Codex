@@ -146,7 +146,10 @@ async def rate_limited_call(
         try:
             if inspect.iscoroutinefunction(func):
                 return await func(*args, **kwargs)
-            return await asyncio.to_thread(func, *args, **kwargs)
+            result = await asyncio.to_thread(func, *args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
         except Exception as exc:
             if not _looks_like_rate_limit_error(exc):
                 raise

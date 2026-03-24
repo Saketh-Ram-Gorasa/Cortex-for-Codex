@@ -29,11 +29,15 @@ It consists of:
 - Live Context Capture with debounce/noise filtering
 - Semantic Firewall for local redaction
 - Cortex as a Service (MCP): query private developer memory from external AI clients
+- Incident Packet generation for contradiction-aware incident response
+- Azure AI Document Intelligence ingestion path for OCR-backed external documents
 - Sidebar Chat with session history and new chat
 - Shadow Graph visualization panel
 - Shadow Graph timeline time-travel with snapshot lookup/restore workflow
 - Decision Archaeology hover (function-level historical reasoning from git + snapshot context)
+- Confidence scoring and disproof checks for incident archaeology flows
 - Retro Git Ingestion (commits, diffs, comments, optional PR context)
+- Testing Sandbox Incident Debug Graph for incident reasoning visibility
 - Activity Lookup fast-path ("what am I working on?" queries from latest snapshot)
 - Secure auth token handling via VS Code SecretStorage
 - Command Palette + CLI-style workflows
@@ -214,6 +218,8 @@ docker compose down
 - `POST /api/v1/query`
 - `POST /api/v1/resurrect`
 - `POST /api/v1/decision-archaeology`
+- `POST /api/v1/incident/packet`
+- `POST /api/v1/ingest/document`
 - `GET /api/v1/events`
 - `GET /api/v1/snapshots/timeline`
 - `GET /api/v1/snapshots/{snapshot_id}`
@@ -244,8 +250,10 @@ Hierarchical MCP tools:
 - `get_related_context(anchor, relationship_types?, depth=1, max_tokens=1000, api_key?, top_k?)`: graph-style related context traversal (`co-changed`, `co-debugged`, `causally-linked`) with bounded depth and budget.
 - `get_context_for_task_type(domain, task_type, project_id?, max_tokens?, api_key?, top_k?)`: task-scoped summaries (`debugging`, `code-review`, `feature-addition`, `incident-response`) with freshness metadata and cache-aware fallback synthesis.
 - `ingest_slack_thread(channel, thread_ts, messages, domain, project_id?, api_key?)`: feature-flagged Slack ingestion path using normalized provenance metadata and reconciliation before persistence.
+- `ingest_document(filename, content_base64, domain, source_uri?, api_key?, project_id?)`: feature-flagged OCR extraction and external document memory ingestion via Azure Document Intelligence.
 - `get_mcp_metrics(api_key?)`: runtime observability summary (request counters, auth/rate-limit rejections, cache stats, graph fan-out, per-tool latency p50/p95/p99).
 - `get_mcp_readiness(api_key?)`: readiness status for auth principal resolution, vector storage availability, and connector flags.
+- `get_incident_packet(question, api_key?, project_id?, time_window?)`: contradiction-aware incident packet with hypotheses, evidence graph, disproof checks, recovery options, and confidence.
 
 Lineage/confidence behavior:
 - MCP retrieval output now includes source lineage fields (`source_type`, `source_uri`) and `confidence_score` when available.
