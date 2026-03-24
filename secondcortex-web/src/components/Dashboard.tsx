@@ -54,6 +54,7 @@ export default function Dashboard({
     }
 
     const userId = getUserIdFromToken(token);
+    const [statsLoading, setStatsLoading] = useState(true);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
@@ -61,6 +62,7 @@ export default function Dashboard({
     });
 
     const fetchStats = useCallback(async () => {
+        setStatsLoading(true);
         try {
             const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
             const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000${projectQuery}`, {
@@ -87,6 +89,8 @@ export default function Dashboard({
             }
         } catch (err) {
             console.error("Failed to fetch stats", err);
+        } finally {
+            setStatsLoading(false);
         }
     }, [backendUrl, token, selectedProjectId]);
 
@@ -106,20 +110,39 @@ export default function Dashboard({
                     {isGuestDeveloper && <p className="pm-mode-chip">Guest Session: Suhaan</p>}
                 </div>
 
-                <div className="sc-stats-grid">
-                    <StatCard 
-                        title="Memory Snapshots" 
-                        value={stats.totalSnapshots.toString()} 
-                        subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(stats.lastSnapshotTime).toLocaleTimeString()}` : "No snapshots yet"} 
-                        icon="storage"
-                    />
-                    <StatCard 
-                        title="Active Project" 
-                        value={selectedProjectName || 'All Projects'} 
-                        subtitle="Current workspace scope" 
-                        icon="workspace"
-                    />
-                </div>
+                {statsLoading ? (
+                    <div className="sc-shimmer-grid" aria-live="polite">
+                        <div className="sc-shimmer-card">
+                            <div className="sc-shimmer-stack">
+                                <div className="sc-shimmer-line w-40" />
+                                <div className="sc-shimmer-line xl w-60" />
+                                <div className="sc-shimmer-line w-80" />
+                            </div>
+                        </div>
+                        <div className="sc-shimmer-card">
+                            <div className="sc-shimmer-stack">
+                                <div className="sc-shimmer-line w-40" />
+                                <div className="sc-shimmer-line xl w-60" />
+                                <div className="sc-shimmer-line w-80" />
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="sc-stats-grid">
+                        <StatCard 
+                            title="Memory Snapshots" 
+                            value={stats.totalSnapshots.toString()} 
+                            subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(stats.lastSnapshotTime).toLocaleTimeString()}` : "No snapshots yet"} 
+                            icon="storage"
+                        />
+                        <StatCard 
+                            title="Active Project" 
+                            value={selectedProjectName || 'All Projects'} 
+                            subtitle="Current workspace scope" 
+                            icon="workspace"
+                        />
+                    </div>
+                )}
 
                 {userId && (
                     <div className="sc-dashboard-panel">

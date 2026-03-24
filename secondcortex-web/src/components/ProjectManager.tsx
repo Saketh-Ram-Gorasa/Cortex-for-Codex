@@ -23,20 +23,25 @@ export default function ProjectManager({
   onProjectsChanged,
 }: ProjectManagerProps) {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionPending, setActionPending] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [renameValueById, setRenameValueById] = useState<Record<string, string>>({});
 
   const loadProjects = async () => {
+    setLoading(true);
     const response = await fetch(`${backendUrl}/api/v1/projects`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
+      setLoading(false);
       return;
     }
     const data = await response.json() as { projects?: ProjectItem[] };
     const list = data.projects || [];
     setProjects(list);
     setRenameValueById(Object.fromEntries(list.map((project) => [project.id, project.name])));
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -47,6 +52,7 @@ export default function ProjectManager({
     if (!newProjectName.trim()) {
       return;
     }
+    setActionPending(true);
     const response = await fetch(`${backendUrl}/api/v1/projects`, {
       method: 'POST',
       headers: {
@@ -56,11 +62,13 @@ export default function ProjectManager({
       body: JSON.stringify({ name: newProjectName.trim() }),
     });
     if (!response.ok) {
+      setActionPending(false);
       return;
     }
     setNewProjectName('');
     await loadProjects();
     onProjectsChanged();
+    setActionPending(false);
   };
 
   const renameProject = async (projectId: string) => {
@@ -68,6 +76,7 @@ export default function ProjectManager({
     if (!nextName) {
       return;
     }
+    setActionPending(true);
     const response = await fetch(`${backendUrl}/api/v1/projects/${projectId}`, {
       method: 'PATCH',
       headers: {
@@ -77,38 +86,46 @@ export default function ProjectManager({
       body: JSON.stringify({ name: nextName }),
     });
     if (!response.ok) {
+      setActionPending(false);
       return;
     }
     await loadProjects();
     onProjectsChanged();
+    setActionPending(false);
   };
 
   const toggleArchive = async (project: ProjectItem) => {
+    setActionPending(true);
     const endpoint = project.is_archived ? 'unarchive' : 'archive';
     const response = await fetch(`${backendUrl}/api/v1/projects/${project.id}/${endpoint}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
+      setActionPending(false);
       return;
     }
     await loadProjects();
     onProjectsChanged();
+    setActionPending(false);
   };
 
   const deleteProject = async (project: ProjectItem) => {
     if (!window.confirm(`Delete project "${project.name}"? This cannot be undone.`)) {
       return;
     }
+    setActionPending(true);
     const response = await fetch(`${backendUrl}/api/v1/projects/${project.id}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
+      setActionPending(false);
       return;
     }
     await loadProjects();
     onProjectsChanged();
+    setActionPending(false);
   };
 
   return (
@@ -141,7 +158,14 @@ export default function ProjectManager({
           </div>
 
           <div style={{ display: 'grid', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
-            {projects.map((project) => (
+            {loading && (
+              <div className="sc-shimmer-stack" aria-live="polite">
+                <div className="sc-shimmer-card"><div className="sc-shimmer-line xl w-60" /></div>
+                <div className="sc-shimmer-card"><div className="sc-shimmer-line xl w-60" /></div>
+                <div className="sc-shimmer-card"><div className="sc-shimmer-line xl w-60" /></div>
+              </div>
+            )}
+            {!loading && projects.map((project) => (
               <div
                 key={project.id}
                 style={{
@@ -181,7 +205,7 @@ export default function ProjectManager({
                 <button className="btn-secondary" onClick={() => deleteProject(project)} type="button" style={{ fontSize: '11px', padding: '6px 10px', color: '#ff6b6b' }}>Delete</button>
               </div>
             ))}
-            {projects.length === 0 && (
+            {!loading && projects.length === 0 && (
               <p style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>No projects yet. Create one above.</p>
             )}
           </div>
@@ -189,8 +213,16 @@ export default function ProjectManager({
           <button
             onClick={onClose}
             className="btn-primary sc-modal-close"
+            disabled={actionPending}
           >
-            Done
+            {actionPending ? (
+              <>
+                <span className="loading-ring" aria-hidden="true" />
+                Working…
+              </>
+            ) : (
+              'Done'
+            )}
           </button>
         </div>
       </div>

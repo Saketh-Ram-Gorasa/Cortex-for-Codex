@@ -275,7 +275,19 @@ export default function AuthGate() {
   };
 
   if (isChecking) {
-    return <div className="sc-shell sc-center-text">Authenticating...</div>;
+    return (
+      <div className="sc-shell sc-dashboard-wrap">
+        <div className="sc-dashboard-inner">
+          <div className="sc-shimmer-card" aria-live="polite">
+            <div className="sc-shimmer-stack">
+              <div className="sc-shimmer-line xl w-40" />
+              <div className="sc-shimmer-line lg w-60" />
+              <div className="sc-shimmer-line w-80" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!token) {
@@ -573,7 +585,14 @@ export default function AuthGate() {
                     onClick={handleCreateTeam}
                     disabled={teamLoading}
                   >
-                    {teamLoading ? 'Creating...' : 'Create Team'}
+                    {teamLoading ? (
+                      <>
+                        <span className="loading-ring" aria-hidden="true" />
+                        Creating…
+                      </>
+                    ) : (
+                      'Create Team'
+                    )}
                   </button>
                   {generatedInviteCode && (
                     <div className="sc-modal-key">
@@ -603,7 +622,14 @@ export default function AuthGate() {
                     onClick={handleJoinTeam}
                     disabled={teamLoading}
                   >
-                    {teamLoading ? 'Joining...' : 'Join Team'}
+                    {teamLoading ? (
+                      <>
+                        <span className="loading-ring" aria-hidden="true" />
+                        Joining…
+                      </>
+                    ) : (
+                      'Join Team'
+                    )}
                   </button>
                 </>
               )}

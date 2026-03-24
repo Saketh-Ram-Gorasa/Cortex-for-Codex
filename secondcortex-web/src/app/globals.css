@@ -2469,9 +2469,80 @@ html.lenis body {
   pointer-events: none;
 }
 
+.sc-shimmer-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.sc-shimmer-card::after,
+.sc-shimmer-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.08) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: shimmer-slide 1.2s linear infinite;
+  pointer-events: none;
+}
+
+.sc-shimmer-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.sc-shimmer-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sc-shimmer-line {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.sc-shimmer-line.lg {
+  height: 16px;
+}
+
+.sc-shimmer-line.xl {
+  height: 22px;
+}
+
+.sc-shimmer-line.w-80 {
+  width: 80%;
+}
+
+.sc-shimmer-line.w-60 {
+  width: 60%;
+}
+
+.sc-shimmer-line.w-40 {
+  width: 40%;
+}
+
+.sc-shimmer-line.w-30 {
+  width: 30%;
+}
+
+@media (max-width: 980px) {
+  .sc-shimmer-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .loading-ring,
-  .query-result.loading::after {
+  .query-result.loading::after,
+  .sc-shimmer-card::after,
+  .sc-shimmer-line::after {
     animation: none;
   }
 }

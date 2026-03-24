@@ -108,7 +108,14 @@ export default function SummaryWidget({
   }, [teamId, userId, period, token, backendUrl, selectedProjectId]);
 
   if (loading) {
-    return <div className="text-xs text-slate-400">Loading summary...</div>;
+    return (
+      <div className="sc-shimmer-stack" aria-live="polite">
+        <div className="sc-shimmer-line lg w-40" />
+        <div className="sc-shimmer-line w-80" />
+        <div className="sc-shimmer-line w-60" />
+        <div className="sc-shimmer-line w-80" />
+      </div>
+    );
   }
 
   if (error) {

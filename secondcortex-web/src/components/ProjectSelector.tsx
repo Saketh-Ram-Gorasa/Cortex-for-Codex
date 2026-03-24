@@ -27,6 +27,7 @@ export default function ProjectSelector({
   onSelectedNameChange,
 }: ProjectSelectorProps) {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [loading, setLoading] = useState(false);
   const hasAutoSelected = useRef(false);
 
   const stableOnChange = useCallback(onChange, []);
@@ -34,11 +35,13 @@ export default function ProjectSelector({
 
   useEffect(() => {
     const loadProjects = async () => {
+      setLoading(true);
       try {
         const response = await fetch(`${backendUrl}/api/v1/projects`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!response.ok) {
+          setLoading(false);
           return;
         }
         const data = await response.json() as { projects?: ProjectItem[] };
@@ -72,6 +75,8 @@ export default function ProjectSelector({
       } catch {
         setProjects([]);
         stableOnNameChange(null);
+      } finally {
+        setLoading(false);
       }
     };
 
@@ -95,7 +100,9 @@ export default function ProjectSelector({
     <select
       value={selectedProjectId || '__all__'}
       onChange={(event) => handleSelectChange(event.target.value)}
-      className="sc-navbar-select"
+      className={`sc-navbar-select ${loading ? 'sc-shimmer-card' : ''}`}
+      disabled={loading}
+      aria-busy={loading}
     >
       <option value="__all__">All Projects</option>
       {projects.map((project) => (
