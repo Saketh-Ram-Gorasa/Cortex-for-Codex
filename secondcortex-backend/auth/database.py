@@ -470,6 +470,32 @@ class UserDB:
 
         return rows
 
+    def assign_project_to_user_snapshots(self, user_ids: list[str], project_id: str) -> int:
+        """Bulk-assign a project_id to synced snapshots for provided users."""
+        normalized_project_id = str(project_id or "").strip()
+        normalized_user_ids = [str(uid).strip() for uid in user_ids if str(uid).strip()]
+        if not normalized_project_id or not normalized_user_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in normalized_user_ids)
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                conn.execute("ALTER TABLE synced_snapshots ADD COLUMN project_id TEXT")
+            except sqlite3.OperationalError:
+                # Column already exists in newer schemas.
+                pass
+
+            cursor = conn.execute(
+                f"""
+                UPDATE synced_snapshots
+                SET project_id = ?
+                WHERE user_id IN ({placeholders})
+                """,
+                (normalized_project_id, *normalized_user_ids),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
+
     def get_sync_checkpoint(self, user_id: str) -> int:
         """Checkpoint = max timestamp visible to user in team scope."""
         snapshots = self.get_team_snapshots(user_id=user_id, per_member_limit=500)

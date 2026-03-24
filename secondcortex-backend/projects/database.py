@@ -228,6 +228,66 @@ class ProjectDB:
             conn.commit()
             return int(result.rowcount or 0) > 0
 
+    def get_team_project_by_name(self, team_id: str, name: str) -> dict[str, Any] | None:
+        """Find an active team-visible project by exact case-insensitive name."""
+        normalized_name = (name or "").strip().lower()
+        if not team_id or not normalized_name:
+            return None
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_user_id, name, slug, visibility, team_id,
+                       workspace_name, workspace_path_hash, repo_remote,
+                       is_archived, created_at, updated_at
+                FROM projects
+                WHERE team_id = ?
+                  AND visibility = 'team'
+                  AND is_archived = 0
+                  AND LOWER(TRIM(name)) = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (team_id, normalized_name),
+            ).fetchone()
+
+        if not row:
+            return None
+        return self._row_to_project(row)
+
+    def list_team_projects(self, team_id: str, include_archived: bool = False) -> list[dict[str, Any]]:
+        """List projects visible to a team, newest updated first."""
+        if not team_id:
+            return []
+
+        with sqlite3.connect(self.db_path) as conn:
+            if include_archived:
+                rows = conn.execute(
+                    """
+                    SELECT id, owner_user_id, name, slug, visibility, team_id,
+                           workspace_name, workspace_path_hash, repo_remote,
+                           is_archived, created_at, updated_at
+                    FROM projects
+                    WHERE team_id = ? AND visibility = 'team'
+                    ORDER BY updated_at DESC
+                    """,
+                    (team_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, owner_user_id, name, slug, visibility, team_id,
+                           workspace_name, workspace_path_hash, repo_remote,
+                           is_archived, created_at, updated_at
+                    FROM projects
+                    WHERE team_id = ? AND visibility = 'team' AND is_archived = 0
+                    ORDER BY updated_at DESC
+                    """,
+                    (team_id,),
+                ).fetchall()
+
+        return [self._row_to_project(row) for row in rows]
+
     def resolve_candidates(
         self,
         user_id: str,

@@ -450,6 +450,50 @@ class VectorDBService:
             logger.error("get_snapshot_by_id failed for %s: %s", snapshot_id, exc)
             return None
 
+    async def assign_project_to_user_snapshots(
+        self,
+        user_id: str,
+        project_id: str,
+        overwrite_existing: bool = True,
+    ) -> int:
+        """Backfill project_id metadata for snapshots in one user's collection."""
+        collection = self._get_collection(user_id)
+        if collection is None:
+            return 0
+
+        normalized_project_id = str(project_id or "").strip()
+        if not normalized_project_id:
+            return 0
+
+        try:
+            results = collection.get(include=["metadatas"])
+            ids = (results or {}).get("ids") or []
+            metadatas = (results or {}).get("metadatas") or []
+            if not ids or not metadatas:
+                return 0
+
+            updated_count = 0
+            for snap_id, meta in zip(ids, metadatas):
+                if not snap_id or not meta:
+                    continue
+
+                current_project_id = str((meta or {}).get("project_id") or "").strip()
+                if current_project_id and not overwrite_existing:
+                    continue
+                if current_project_id == normalized_project_id:
+                    continue
+
+                new_meta = dict(meta)
+                new_meta["project_id"] = normalized_project_id
+                collection.update(ids=[str(snap_id)], metadatas=[new_meta])
+                updated_count += 1
+
+            self._clear_user_cache(user_id)
+            return updated_count
+        except Exception as exc:
+            logger.error("assign_project_to_user_snapshots failed for user=%s: %s", user_id, exc)
+            return 0
+
     # ── Long-Term Memory: Facts ────────────────────────────────
 
     def _get_facts_collection(self, user_id: str | None = None):

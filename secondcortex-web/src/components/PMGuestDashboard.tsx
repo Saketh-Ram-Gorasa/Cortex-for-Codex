@@ -313,7 +313,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
           </div>
         )}
 
-        {!loading && !error && (
+        {!loading && (
           <div className="pm-grid" style={{ display: 'grid', gridTemplateColumns: '25% 1fr', gap: '16px', marginTop: '20px' }}>
             {/* LEFT PANEL: Project List */}
             <section className="pm-panel">

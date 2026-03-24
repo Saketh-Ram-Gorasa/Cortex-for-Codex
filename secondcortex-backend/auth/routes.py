@@ -14,6 +14,7 @@ from pydantic import BaseModel, EmailStr
 from auth.database import UserDB
 from auth.jwt_handler import create_token, create_pm_guest_token, get_current_principal, get_current_user
 from config import settings
+from projects.database import ProjectDB
 from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.auth.routes")
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 # Shared DB instance
 user_db = UserDB()
 vector_db = VectorDBService()
+project_db = ProjectDB()
 
 
 class SignupRequest(BaseModel):
@@ -98,6 +100,73 @@ class GuestLoginResponse(BaseModel):
     email: str
     display_name: str
     team_id: str | None = None
+
+
+async def _bootstrap_secondcortex_project(team_id: str) -> None:
+    """Ensure a team-visible SecondCortex project exists and backfill snapshot project IDs."""
+    normalized_team_id = str(team_id or "").strip()
+    if not normalized_team_id:
+        return
+
+    members = user_db.get_team_members(normalized_team_id)
+    if not members:
+        return
+
+    team_info = user_db.get_team_info(normalized_team_id) or {}
+    team_lead_id = str(team_info.get("team_lead_id") or "").strip()
+    owner_user_id = team_lead_id or str(members[0].get("id") or "").strip()
+    if not owner_user_id:
+        return
+
+    existing = project_db.get_team_project_by_name(team_id=normalized_team_id, name="SecondCortex")
+    if existing:
+        project = existing
+    else:
+        project = project_db.create_project(
+            owner_user_id=owner_user_id,
+            name="SecondCortex",
+            visibility="team",
+            team_id=normalized_team_id,
+            workspace_name="SecondCortexLabs",
+        )
+        logger.info("Bootstrapped team project %s for team=%s", project.get("id"), normalized_team_id)
+
+    project_id = str(project.get("id") or "").strip()
+    if not project_id:
+        return
+
+    target_members = [
+        member for member in members
+        if "suh" in str(member.get("email") or "").lower()
+        or "sak" in str(member.get("email") or "").lower()
+        or "suh" in str(member.get("display_name") or "").lower()
+        or "sak" in str(member.get("display_name") or "").lower()
+    ]
+    if not target_members:
+        target_members = members
+
+    target_user_ids = [str(member.get("id") or "").strip() for member in target_members if member.get("id")]
+    if not target_user_ids:
+        return
+
+    sqlite_updated = user_db.assign_project_to_user_snapshots(target_user_ids, project_id)
+
+    chroma_updated = 0
+    for target_user_id in target_user_ids:
+        chroma_updated += await vector_db.assign_project_to_user_snapshots(
+            user_id=target_user_id,
+            project_id=project_id,
+            overwrite_existing=True,
+        )
+
+    logger.info(
+        "Project bootstrap complete team=%s project=%s users=%d sqlite_updated=%d chroma_updated=%d",
+        normalized_team_id,
+        project_id,
+        len(target_user_ids),
+        sqlite_updated,
+        chroma_updated,
+    )
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -261,6 +330,8 @@ async def pm_guest_login():
 
     if not resolved_team_id:
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")
+
+    await _bootstrap_secondcortex_project(resolved_team_id)
 
     display_name = (settings.pm_guest_display_name or "PM Guest").strip()
     token = create_pm_guest_token(team_id=resolved_team_id, display_name=display_name)
