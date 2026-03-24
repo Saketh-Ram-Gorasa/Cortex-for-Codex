@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   BACKEND_IMAGE: ""
   FRONTEND_IMAGE: ""
@@ -20,6 +21,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: false
 
       - name: Compute lowercase image names
         shell: bash
@@ -62,6 +66,12 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: false
+
       - name: Compute lowercase image names
         shell: bash
         run: |
