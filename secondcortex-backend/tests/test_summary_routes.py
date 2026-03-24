@@ -66,3 +66,41 @@ def test_get_weekly_summary(client, team_setup):
     assert data["period"] == "weekly"
     assert "members" in data
     assert "daily_breakdown" in data
+
+
+def test_get_team_evolution_summary_daily(client, team_setup):
+    """Team evolution endpoint returns compressed daily feed shape."""
+    team_id = team_setup["team_id"]
+    headers = team_setup["headers"]
+
+    response = client.get(
+        f"/api/v1/summaries/team/{team_id}/evolution?mode=daily&limit=20",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["team_id"] == team_id
+    assert data["mode"] == "daily"
+    assert "snapshot_count" in data
+    assert "entries" in data
+    assert isinstance(data["entries"], list)
+
+
+def test_get_team_evolution_summary_feature(client, team_setup):
+    """Team evolution endpoint returns compressed feature feed shape."""
+    team_id = team_setup["team_id"]
+    headers = team_setup["headers"]
+
+    response = client.get(
+        f"/api/v1/summaries/team/{team_id}/evolution?mode=feature&limit=20",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["team_id"] == team_id
+    assert data["mode"] == "feature"
+    assert "snapshot_count" in data
+    assert "entries" in data
+    assert isinstance(data["entries"], list)
