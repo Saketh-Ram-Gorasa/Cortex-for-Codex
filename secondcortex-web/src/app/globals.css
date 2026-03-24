@@ -1121,6 +1121,56 @@ section {
   letter-spacing: 0.1em;
 }
 
+.feature-access-section {
+  padding: 80px 48px 40px;
+}
+
+.feature-access-grid {
+  margin-top: 36px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.feature-access-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  text-decoration: none;
+  color: var(--text);
+  padding: 20px;
+  transition: border-color 0.2s, transform 0.2s, background 0.2s;
+}
+
+.feature-access-card:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.04);
+  transform: translateY(-2px);
+}
+
+.feature-access-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.feature-access-desc {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.feature-access-cta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--cyan);
+}
+
 .cta-label {
   justify-content: center;
 }
@@ -1130,15 +1180,31 @@ footer {
   padding: 40px 48px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 40px;
+  flex-wrap: wrap;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
 }
 
+.footer-links-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.footer-links-title {
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+}
+
 .footer-links {
   display: flex;
-  gap: 32px;
+  gap: 10px;
+  flex-direction: column;
 }
 
 .footer-links a {
@@ -2089,7 +2155,8 @@ footer {
   .pipeline-nodes,
   .agents-grid-three,
   .demo-split,
-  .security-grid {
+  .security-grid,
+  .feature-access-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2120,7 +2187,11 @@ footer {
   footer {
     flex-direction: column;
     gap: 20px;
-    text-align: center;
+    text-align: left;
+  }
+
+  .feature-access-section {
+    padding-top: 60px;
   }
 
   .footer-links {
