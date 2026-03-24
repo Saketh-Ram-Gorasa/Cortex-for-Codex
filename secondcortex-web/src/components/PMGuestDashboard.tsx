@@ -31,6 +31,18 @@ interface ChatMessage {
   text: string;
 }
 
+interface TimelineEvolutionEntry {
+  id: string;
+  dayLabel: string;
+  snapshotCount: number;
+  topFeatures: string[];
+  topBranches: string[];
+  combinedSummary: string;
+  outcome: 'successful' | 'needs_rework' | 'mixed' | 'in_progress';
+}
+
+type TimelineGrouping = 'daily' | 'feature';
+
 function toEpochMs(ts: number): number {
   if (ts > 10_000_000_000) {
     return ts;
@@ -45,6 +57,45 @@ function fmtSnapshotLine(snapshot: ProjectSnapshot): string {
   }`;
 }
 
+function summarizeFeatureName(activeFile: string): string {
+  const clean = activeFile.replace(/\\/g, '/');
+  const base = clean.split('/').pop() || clean;
+  return base.replace(/\.[^.]+$/, '') || base;
+}
+
+function classifyOutcome(text: string): TimelineEvolutionEntry['outcome'] {
+  const hasFailureSignal = /\b(fail|failed|failure|error|bug|bugs|rollback|revert|blocked|issue|broken|regression|timeout|crash|hotfix|retry|flaky|unstable|degraded|incident)\b/i.test(
+    text,
+  );
+  const hasSuccessSignal = /\b(success|successful|fixed|resolved|merged|completed|shipped|stable|pass|passed|improved|optimized|released|delivery complete|validated|green)\b/i.test(
+    text,
+  );
+
+  if (hasFailureSignal && hasSuccessSignal) {
+    return 'mixed';
+  }
+  if (hasFailureSignal) {
+    return 'needs_rework';
+  }
+  if (hasSuccessSignal) {
+    return 'successful';
+  }
+  return 'in_progress';
+}
+
+function outcomeLabel(outcome: TimelineEvolutionEntry['outcome']): string {
+  if (outcome === 'successful') {
+    return 'Successful';
+  }
+  if (outcome === 'needs_rework') {
+    return 'Needs Rework';
+  }
+  if (outcome === 'mixed') {
+    return 'Mixed';
+  }
+  return 'In Progress';
+}
+
 export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGuestDashboardProps) {
   const apiBase = backendUrl || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
 
@@ -56,14 +107,20 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [chatPending, setChatPending] = useState(false);
+  const [timelineGrouping, setTimelineGrouping] = useState<TimelineGrouping>('daily');
 
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      text: 'Welcome PM. Chat is connected to the integrated backend LLM. Ask about project progress, status, or any development questions.',
+      text: 'Welcome to Team Cortex. Ask about project progress, timeline evolution, delivery risk, or feature outcomes.',
     },
   ]);
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId) || null,
+    [projects, selectedProjectId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +154,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         }
 
         // Fetch snapshots for selected project
-        if (selectedProjectId && projectList.some(p => p.id === selectedProjectId)) {
+        if (selectedProjectId && projectList.some((project) => project.id === selectedProjectId)) {
           try {
             const snapshotsRes = await fetch(
               `${apiBase}/api/v1/snapshots/timeline?projectId=${encodeURIComponent(selectedProjectId)}&limit=1000`,
@@ -123,6 +180,9 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
             setProjectSnapshotError(msg);
             setProjectSnapshots([]);
           }
+        } else {
+          setProjectSnapshots([]);
+          setProjectSnapshotError('');
         }
 
         if (!cancelled) {
@@ -130,7 +190,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         }
       } catch (err) {
         if (!cancelled && !background) {
-          setError(err instanceof Error ? err.message : 'Failed to load PM dashboard data.');
+          setError(err instanceof Error ? err.message : 'Failed to load Team Cortex data.');
           setLoading(false);
         }
       }
@@ -157,6 +217,108 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     };
   }, [apiBase, token, selectedProjectId]);
 
+  const evolutionTimeline = useMemo<TimelineEvolutionEntry[]>(() => {
+    if (!selectedProjectId || projectSnapshots.length === 0) {
+      return [];
+    }
+
+    const snapshotsDesc = [...projectSnapshots].sort((a, b) => toEpochMs(b.timestamp) - toEpochMs(a.timestamp));
+    const grouped = new Map<string, ProjectSnapshot[]>();
+
+    snapshotsDesc.forEach((snapshot) => {
+      const groupKey =
+        timelineGrouping === 'feature'
+          ? `feature:${summarizeFeatureName(snapshot.active_file || 'unknown')}`
+          : `day:${new Date(toEpochMs(snapshot.timestamp)).toISOString().slice(0, 10)}`;
+      const current = grouped.get(groupKey) || [];
+      current.push(snapshot);
+      grouped.set(groupKey, current);
+    });
+
+    return Array.from(grouped.entries())
+      .sort((a, b) => {
+        if (timelineGrouping === 'feature') {
+          return b[1].length - a[1].length;
+        }
+        return a[0] < b[0] ? 1 : -1;
+      })
+      .map(([groupKey, daySnapshots]) => {
+        const summarySet = new Set<string>();
+        const branchSet = new Set<string>();
+        const featureCounts = new Map<string, number>();
+
+        daySnapshots.forEach((snapshot) => {
+          const trimmedSummary = (snapshot.summary || '').trim();
+          if (trimmedSummary) {
+            summarySet.add(trimmedSummary);
+          }
+
+          const branch = (snapshot.git_branch || '').trim();
+          if (branch) {
+            branchSet.add(branch);
+          }
+
+          const feature = summarizeFeatureName(snapshot.active_file || 'unknown');
+          featureCounts.set(feature, (featureCounts.get(feature) || 0) + 1);
+        });
+
+        const topFeatures = Array.from(featureCounts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([feature]) => feature);
+
+        const topBranches = Array.from(branchSet).slice(0, 3);
+        const summarySnippets = Array.from(summarySet).slice(0, 3);
+
+        const combinedSummary =
+          summarySnippets.length > 0
+            ? summarySnippets.join(' | ')
+            : 'No compressed summary was captured for this timeline window.';
+
+        const outcome = classifyOutcome(combinedSummary);
+        const dayLabel =
+          timelineGrouping === 'feature'
+            ? `Feature: ${groupKey.replace(/^feature:/, '')}`
+            : new Date(`${groupKey.replace(/^day:/, '')}T00:00:00`).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              });
+
+        return {
+          id: groupKey,
+          dayLabel,
+          snapshotCount: daySnapshots.length,
+          topFeatures,
+          topBranches,
+          combinedSummary,
+          outcome,
+        };
+      });
+  }, [projectSnapshots, selectedProjectId, timelineGrouping]);
+
+  const combinedEvolutionSummary = useMemo(() => {
+    if (!selectedProjectId) {
+      return 'Select a project to see timeline-based evolution.';
+    }
+    if (evolutionTimeline.length === 0) {
+      return 'No timeline entries are available for this project yet.';
+    }
+
+    const successfulDays = evolutionTimeline.filter((entry) => entry.outcome === 'successful').length;
+    const reworkDays = evolutionTimeline.filter((entry) => entry.outcome === 'needs_rework').length;
+    const mixedDays = evolutionTimeline.filter((entry) => entry.outcome === 'mixed').length;
+
+    return [
+      `Grouping: ${timelineGrouping === 'daily' ? 'Daily windows' : 'Feature windows'}`,
+      `Timeline windows: ${evolutionTimeline.length}`,
+      `Successful windows: ${successfulDays}`,
+      `Needs rework windows: ${reworkDays}`,
+      `Mixed windows: ${mixedDays}`,
+      `Total project snapshots: ${projectSnapshots.length}`,
+    ].join(' | ');
+  }, [evolutionTimeline, projectSnapshots.length, selectedProjectId, timelineGrouping]);
+
   const sendQuestion = async (input: string) => {
     const trimmed = input.trim();
     if (!trimmed || chatPending) {
@@ -168,22 +330,24 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     setChatPending(true);
 
     try {
-      const selectedProject = projects.find((p) => p.id === selectedProjectId);
       const projectContext = selectedProject
         ? [
             `Selected project: ${selectedProject.name}`,
             `Project visibility: ${selectedProject.visibility || 'private'}`,
             `Project status: ${selectedProject.is_archived ? 'archived' : 'active'}`,
             `Total snapshots tracked: ${projectSnapshots.length}`,
-            `Recent Project Activity (last 20 snapshots):`,
-            ...(projectSnapshots.slice(0, 20).map((snapshot) => `- ${fmtSnapshotLine(snapshot)}`) || []),
-            `Project Evolution Summary:`,
-            getProjectEvolutionSummary(),
+            `Evolution timeline (most recent first):`,
+            ...evolutionTimeline.slice(0, 8).map(
+              (entry) =>
+                `- ${entry.dayLabel} | ${outcomeLabel(entry.outcome)} | features: ${entry.topFeatures.join(', ') || 'none'} | summary: ${entry.combinedSummary}`,
+            ),
+            `Latest snapshot lines (last 20):`,
+            ...projectSnapshots.slice(0, 20).map((snapshot) => `- ${fmtSnapshotLine(snapshot)}`),
           ].join('\n')
         : 'No project selected.';
 
       const composedQuestion = [
-        'You are assisting a Project Manager on SecondCortex.',
+        'You are assisting Team Cortex on SecondCortex.',
         'Provide practical insights about project progress and evolution.',
         'Do not attribute work to individuals; focus on project status.',
         'Avoid hallucinations and stick to the provided context.',
@@ -225,66 +389,16 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
     }
   };
 
-  // Compute project evolution summary (feature compression)
-  const getProjectEvolutionSummary = (): string => {
-    if (!selectedProjectId) {
-      return 'Select a project to view evolution timeline.';
-    }
-    
-    const snapshots = projectSnapshots;
-    if (snapshots.length === 0) {
-      return 'No snapshots available for this project yet.';
-    }
-
-    // Extract top files, branches, and recent activity
-    const fileMap = new Map<string, number>();
-    const branchSet = new Set<string>();
-    const commandSamples: string[] = [];
-
-    snapshots.forEach((snapshot) => {
-      if (snapshot.active_file) {
-        const ext = snapshot.active_file.split('.').pop() || 'file';
-        const key = `[${ext}] ${snapshot.active_file.split('/').pop()}`;
-        fileMap.set(key, (fileMap.get(key) || 0) + 1);
-      }
-      if (snapshot.git_branch) {
-        branchSet.add(snapshot.git_branch);
-      }
-      if (snapshot.terminal_commands && snapshot.terminal_commands.length > 0) {
-        commandSamples.push(...snapshot.terminal_commands.slice(0, 1));
-      }
-    });
-
-    const topFiles = Array.from(fileMap.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([file]) => file);
-
-    const branches = Array.from(branchSet).slice(0, 3);
-    const recentActivity = snapshots
-      .slice(0, 2)
-      .map((s) => `[${new Date(toEpochMs(s.timestamp)).toLocaleTimeString()}] ${fmtSnapshotLine(s)}`)
-      .join('\n');
-
-    return [
-      `Project Evolution Summary:`,
-      `Total snapshots tracked: ${snapshots.length}`,
-      `Most active files: ${topFiles.join(', ') || 'none'}`,
-      `Active branches: ${branches.join(', ') || 'main'}`,
-      `\nRecent Activity:\n${recentActivity}`,
-    ].join('\n');
-  };
-
   return (
     <div className="sc-dashboard-wrap">
       <div className="sc-dashboard-inner">
         <div className="sc-section-header pm-header">
-          <p className="section-label">PM Control Surface</p>
-          <h1 className="section-title pm-title">Project Manager Dashboard</h1>
+          <p className="section-label">Team Cortex Control Surface</p>
+          <h1 className="section-title pm-title">Team Cortex</h1>
           <p className="section-desc">
-            Manage projects and track their evolution. View project snapshots, analyze progress, and chat with AI for project insights.
+            Track project evolution using compressed timeline summaries, then query the assistant for deeper analysis.
           </p>
-          <p className="pm-mode-chip">{isGuestPm ? 'Guest PM Session' : 'Authenticated PM Session'}</p>
+          <p className="pm-mode-chip">{isGuestPm ? 'Team Cortex Guest Session' : 'Team Cortex Session'}</p>
         </div>
 
         <div className="sc-stats-grid">
@@ -314,107 +428,123 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         )}
 
         {!loading && !error && (
-          <div className="pm-grid" style={{ display: 'grid', gridTemplateColumns: '25% 1fr', gap: '16px', marginTop: '20px' }}>
-            {/* LEFT PANEL: Project List */}
-            <section className="pm-panel">
-              <p className="pm-panel-kicker">Portfolio</p>
-              <h2 className="pm-panel-title">Projects</h2>
-              <div className="pm-member-list">
-                {projects.length === 0 ? (
-                  <p style={{ padding: '12px', color: '#999' }}>No projects available.</p>
-                ) : (
-                  projects.map((project) => (
-                    <div key={project.id} className={`pm-member-btn ${project.id === selectedProjectId ? 'active' : ''}`}>
-                      <button
-                        className="pm-member-main"
-                        type="button"
-                        onClick={() => setSelectedProjectId(project.id)}
-                      >
-                        <span className="pm-member-name">{project.name}</span>
-                        <span className="pm-member-role">{project.visibility || 'private'}</span>
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
-
-            {/* RIGHT SIDE: 2-row layout (evolution + chat) */}
-            <div style={{ display: 'grid', gridTemplateRows: '1fr 1fr', gap: '16px' }}>
-              {/* RIGHT-TOP: Project Evolution */}
+          <div className="pm-grid pm-grid-layout">
+            <div className="pm-left-layout">
               <section className="pm-panel">
-                <p className="pm-panel-kicker">Evolution</p>
-                <h2 className="pm-panel-title">Project Progress</h2>
-                <div className="pm-history">
-                  {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
-                  {projectSnapshots.length === 0 && !projectSnapshotError && (
-                    <p className="pm-history-summary">No snapshots for this project yet.</p>
+                <p className="pm-panel-kicker">Portfolio</p>
+                <h2 className="pm-panel-title">Projects</h2>
+                <div className="pm-member-list">
+                  {projects.length === 0 ? (
+                    <p style={{ padding: '12px', color: '#999' }}>No projects available.</p>
+                  ) : (
+                    projects.map((project) => (
+                      <div key={project.id} className={`pm-member-btn ${project.id === selectedProjectId ? 'active' : ''}`}>
+                        <button className="pm-member-main" type="button" onClick={() => setSelectedProjectId(project.id)}>
+                          <span className="pm-member-name">{project.name}</span>
+                          <span className="pm-member-role">{project.visibility || 'private'}</span>
+                        </button>
+                      </div>
+                    ))
                   )}
-                  {projectSnapshots.length > 0 && (
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '12px', color: '#666', padding: '8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
-                      {getProjectEvolutionSummary()}
-                    </div>
-                  )}
-                  <div style={{ marginTop: '12px', maxHeight: '200px', overflowY: 'auto' }}>
-                    {projectSnapshots.slice(0, 5).map((snapshot) => (
-                      <article key={snapshot.id} className="pm-history-item">
-                        <div className="pm-history-head">
-                          <span>{new Date(toEpochMs(snapshot.timestamp)).toLocaleString()}</span>
-                          <span>{snapshot.git_branch || 'no-branch'}</span>
-                        </div>
-                        <div className="pm-history-file">{snapshot.active_file || 'Unknown file'}</div>
-                        <p className="pm-history-summary">{snapshot.summary || 'No summary for this snapshot.'}</p>
-                      </article>
-                    ))}
-                  </div>
                 </div>
               </section>
 
-              {/* RIGHT-BOTTOM: Chatbot */}
               <section className="pm-panel">
-                <p className="pm-panel-kicker">Assistant</p>
-                <h2 className="pm-panel-title">Project Insights</h2>
-                <p className="pm-chat-sub">Ask about project progress and evolution.</p>
-
-                <div className="pm-chat-quick">
-                  <button type="button" onClick={() => sendQuestion('What is the current project status based on recent activity?')}>
-                    Project status
+                <p className="pm-panel-kicker">Timeline Evolution</p>
+                <h2 className="pm-panel-title">Compressed Project Evolution</h2>
+                <div className="pm-timeline-controls">
+                  <button
+                    type="button"
+                    className={`pm-timeline-toggle ${timelineGrouping === 'daily' ? 'active' : ''}`}
+                    onClick={() => setTimelineGrouping('daily')}
+                  >
+                    Daily
                   </button>
-                  <button type="button" onClick={() => sendQuestion('What are the key files and technologies in use?')}>
-                    Tech stack
-                  </button>
-                  <button type="button" onClick={() => sendQuestion('Summarize the project progress.')}>
-                    Progress
+                  <button
+                    type="button"
+                    className={`pm-timeline-toggle ${timelineGrouping === 'feature' ? 'active' : ''}`}
+                    onClick={() => setTimelineGrouping('feature')}
+                  >
+                    Feature
                   </button>
                 </div>
+                <div className="pm-summary-card">
+                  <div className="pm-summary-head">
+                    <span>{selectedProject ? selectedProject.name : 'No project selected'}</span>
+                    <span className="pm-summary-tag">SUMMARY</span>
+                  </div>
+                  <p>{combinedEvolutionSummary}</p>
+                </div>
 
-                <div className="pm-chat-log" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '12px' }}>
-                  {messages.map((message, index) => (
-                    <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
-                      {message.text}
-                    </div>
+                <div className="pm-history" style={{ marginTop: '12px', maxHeight: '540px' }}>
+                  {projectSnapshotError && <p className="sc-auth-error">Snapshot sync error: {projectSnapshotError}</p>}
+                  {evolutionTimeline.length === 0 && !projectSnapshotError && (
+                    <p className="pm-history-summary">No compressed timeline entries are available for this project yet.</p>
+                  )}
+                  {evolutionTimeline.map((entry) => (
+                    <article key={entry.id} className="pm-history-item">
+                      <div className="pm-history-head">
+                        <span>{entry.dayLabel}</span>
+                        <span>{entry.snapshotCount} snapshots</span>
+                      </div>
+                      <div className="pm-history-file">Features: {entry.topFeatures.join(', ') || 'Not identified'}</div>
+                      <p className="pm-history-summary">{entry.combinedSummary}</p>
+                      <div className="pm-compression">
+                        <p>Branches: {entry.topBranches.join(', ') || 'main'}</p>
+                        <p>
+                          Outcome:{' '}
+                          <span className={`pm-outcome-chip ${entry.outcome}`}>{outcomeLabel(entry.outcome)}</span>
+                        </p>
+                      </div>
+                    </article>
                   ))}
-                </div>
-
-                <div className="pm-chat-input-wrap">
-                  <input
-                    className="query-input"
-                    type="text"
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        void sendQuestion(question);
-                      }
-                    }}
-                    placeholder="Ask about project"
-                  />
-                  <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
-                    {chatPending ? 'Asking...' : 'Ask'}
-                  </button>
                 </div>
               </section>
             </div>
+
+            <section className="pm-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+              <p className="pm-panel-kicker">Assistant</p>
+              <h2 className="pm-panel-title">Team Cortex Chat</h2>
+              <p className="pm-chat-sub">Query any project detail, timeline shift, risk signal, or delivery status.</p>
+
+              <div className="pm-chat-quick">
+                <button type="button" onClick={() => sendQuestion('Which recent timeline windows indicate risk and why?')}>
+                  Risk windows
+                </button>
+                <button type="button" onClick={() => sendQuestion('Summarize whether the latest feature work was successful or not.')}>
+                  Outcome trend
+                </button>
+                <button type="button" onClick={() => sendQuestion('What should the team do next based on timeline evolution?')}>
+                  Next actions
+                </button>
+              </div>
+
+              <div className="pm-chat-log" style={{ flex: 1, minHeight: '340px' }}>
+                {messages.map((message, index) => (
+                  <div key={`${message.role}-${index}`} className={`pm-chat-msg ${message.role}`}>
+                    {message.text}
+                  </div>
+                ))}
+              </div>
+
+              <div className="pm-chat-input-wrap">
+                <input
+                  className="query-input"
+                  type="text"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      void sendQuestion(question);
+                    }
+                  }}
+                  placeholder="Ask Team Cortex"
+                />
+                <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
+                  {chatPending ? 'Asking...' : 'Ask'}
+                </button>
+              </div>
+            </section>
           </div>
         )}
       </div>

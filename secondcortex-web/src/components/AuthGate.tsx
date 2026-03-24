@@ -155,7 +155,7 @@ export default function AuthGate() {
             onClick={() => setActiveTab('dashboard')}
             className={`sc-app-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
           >
-            {sessionMode === 'pm' ? 'PM Dashboard' : 'Dashboard'}
+            {sessionMode === 'pm' ? 'Team Cortex' : 'Dashboard'}
           </button>
           {!isPmGuest && (
             <button
@@ -202,7 +202,7 @@ export default function AuthGate() {
                 <div className="sc-dashboard-panel-inner" style={{ display: 'block' }}>
                   <h2 className="sc-dashboard-h2">Live Context Graph Disabled in PM Guest Mode</h2>
                   <p className="sc-dashboard-p">
-                    Use PM Dashboard to inspect teammate snapshots and compression summaries. Authenticated PM login
+                    Use Team Cortex to inspect teammate snapshots and compression summaries. Authenticated Team Cortex login
                     enables live graph access.
                   </p>
                 </div>

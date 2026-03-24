@@ -29,7 +29,7 @@ export default function LandingPage() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "PM login failed. Please check credentials.");
+      throw new Error(err.detail || "Team Cortex login failed. Please check credentials.");
     }
 
     const data = await res.json();
@@ -56,7 +56,7 @@ export default function LandingPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Guest PM login is unavailable right now.");
+        throw new Error(err.detail || "Team Cortex guest login is unavailable right now.");
       }
 
       const data = await res.json();
@@ -66,7 +66,7 @@ export default function LandingPage() {
       router.push("/live?pm=true&guest=true");
       setShowPmModal(false);
     } catch (err) {
-      setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
+      setPmError(err instanceof Error ? err.message : "Team Cortex guest login failed.");
     } finally {
       setIsPmSubmitting(false);
     }
@@ -950,9 +950,9 @@ export default function LandingPage() {
           <div className="sc-modal-backdrop" onClick={() => setShowPmModal(false)} />
           <div className="sc-modal-card pm-login-card">
             <div className="sc-auth-header">
-              <p className="sc-auth-eyebrow">Project Manager Access</p>
-              <h2 className="sc-auth-title">PM Login</h2>
-              <p className="sc-auth-sub">Log in as PM or continue with guest access to review team progress.</p>
+              <p className="sc-auth-eyebrow">Team Cortex Access</p>
+              <h2 className="sc-auth-title">Team Cortex Login</h2>
+              <p className="sc-auth-sub">Log in to Team Cortex or continue with guest access to review team progress.</p>
             </div>
 
             <form onSubmit={handlePmLogin} className="sc-auth-form">
@@ -985,7 +985,7 @@ export default function LandingPage() {
               {pmError && <div className="sc-auth-error">{pmError}</div>}
 
               <button type="submit" disabled={isPmSubmitting} className="btn-primary sc-auth-submit">
-                {isPmSubmitting ? "Please wait..." : "Login as PM"}
+                {isPmSubmitting ? "Please wait..." : "Enter Team Cortex"}
               </button>
 
               <button
@@ -994,7 +994,7 @@ export default function LandingPage() {
                 disabled={isPmSubmitting}
                 onClick={handlePmGuestLogin}
               >
-                {isPmSubmitting ? "Please wait..." : "Guest Login"}
+                {isPmSubmitting ? "Please wait..." : "Team Cortex Guest Login"}
               </button>
             </form>
           </div>
