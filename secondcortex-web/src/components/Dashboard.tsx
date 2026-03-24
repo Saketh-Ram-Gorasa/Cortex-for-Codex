@@ -115,7 +115,7 @@ export default function Dashboard({
                     />
                     <StatCard 
                         title="Active Project" 
-                        value={selectedProjectName || 'No Project Selected'} 
+                        value={selectedProjectName || 'All Projects'} 
                         subtitle="Current workspace scope" 
                         icon="workspace"
                     />

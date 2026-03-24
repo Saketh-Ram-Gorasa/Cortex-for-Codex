@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 
 interface ProjectItem {
   id: string;
@@ -27,6 +27,10 @@ export default function ProjectSelector({
   onSelectedNameChange,
 }: ProjectSelectorProps) {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const hasAutoSelected = useRef(false);
+
+  const stableOnChange = useCallback(onChange, []);
+  const stableOnNameChange = useCallback(onSelectedNameChange || (() => {}), []);
 
   useEffect(() => {
     const loadProjects = async () => {
@@ -41,61 +45,64 @@ export default function ProjectSelector({
         const visibleProjects = (data.projects || []).filter((project) => !project.is_archived);
         setProjects(visibleProjects);
 
-        if (visibleProjects.length === 0) {
-          onSelectedNameChange?.(null);
-          if (selectedProjectId) {
-            onChange(null);
+        // If user already selected something valid, just sync the name
+        if (selectedProjectId) {
+          const match = visibleProjects.find((p) => p.id === selectedProjectId);
+          if (match) {
+            stableOnNameChange(match.name);
+            return;
           }
-          return;
         }
 
-        // If there's already a valid selection, keep it
-        const selectedProject = visibleProjects.find((project) => project.id === selectedProjectId) || null;
-        if (selectedProject) {
-          onSelectedNameChange?.(selectedProject.name);
-          return;
+        // Auto-select only once: find a "secondcortex"-like project
+        if (!hasAutoSelected.current && visibleProjects.length > 0) {
+          hasAutoSelected.current = true;
+          const normalized = (name: string) => name.toLowerCase().replace(/[\s\-_]/g, '');
+          const scProject = visibleProjects.find((p) => normalized(p.name).includes('secondcortex'));
+
+          if (scProject) {
+            stableOnChange(scProject.id);
+            stableOnNameChange(scProject.name);
+          } else {
+            // Don't auto-select a random project — default to "All Projects"
+            stableOnChange(null);
+            stableOnNameChange(null);
+          }
         }
-
-        // Default to a project containing "secondcortex" in the name, or fallback to first
-        const defaultProject =
-          visibleProjects.find((p) => p.name.toLowerCase().includes('secondcortex')) ||
-          visibleProjects[0];
-
-        onChange(defaultProject.id);
-        onSelectedNameChange?.(defaultProject.name);
       } catch {
         setProjects([]);
-        onSelectedNameChange?.(null);
+        stableOnNameChange(null);
       }
     };
 
     if (token) {
       loadProjects();
     }
-  }, [backendUrl, token, selectedProjectId, onChange, refreshKey, onSelectedNameChange]);
+  }, [backendUrl, token, refreshKey, selectedProjectId, stableOnChange, stableOnNameChange]);
 
-  const handleSelectChange = (nextProjectId: string) => {
-    const normalizedId = nextProjectId || null;
-    onChange(normalizedId);
-    const selectedProject = projects.find((project) => project.id === normalizedId) || null;
-    onSelectedNameChange?.(selectedProject?.name || null);
+  const handleSelectChange = (nextValue: string) => {
+    if (nextValue === '__all__' || !nextValue) {
+      stableOnChange(null);
+      stableOnNameChange(null);
+    } else {
+      stableOnChange(nextValue);
+      const match = projects.find((p) => p.id === nextValue);
+      stableOnNameChange(match?.name || null);
+    }
   };
 
   return (
     <select
-      value={selectedProjectId || ''}
+      value={selectedProjectId || '__all__'}
       onChange={(event) => handleSelectChange(event.target.value)}
       className="sc-navbar-select"
     >
-      {projects.length === 0 ? (
-        <option value="">No Projects</option>
-      ) : (
-        projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))
-      )}
+      <option value="__all__">All Projects</option>
+      {projects.map((project) => (
+        <option key={project.id} value={project.id}>
+          {project.name}
+        </option>
+      ))}
     </select>
   );
 }
