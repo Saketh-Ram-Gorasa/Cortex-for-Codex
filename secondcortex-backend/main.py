@@ -408,6 +408,46 @@ def _require_project_access(user_id: str, project_id: str | None) -> None:
         raise HTTPException(status_code=403, detail="Not authorized to access this project")
 
 
+def _require_pm_guest_project_access(principal: dict, project_id: str | None) -> None:
+    if not project_id:
+        return
+
+    role = str(principal.get("role") or "user")
+    if role != "pm_guest":
+        return
+
+    scopes = _principal_scopes(principal)
+    if "pm:read" not in scopes:
+        raise HTTPException(status_code=403, detail="PM guest token lacks read scope.")
+
+    team_id = str(principal.get("team_id") or "").strip()
+    if not team_id:
+        raise HTTPException(status_code=403, detail="PM guest token missing team scope.")
+
+    project = project_db.get_project_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if str(project.get("team_id") or "").strip() != team_id or str(project.get("visibility") or "") != "team":
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+
+def _resolve_timeline_user_ids(principal: dict) -> list[str]:
+    role = str(principal.get("role") or "user")
+    if role != "pm_guest":
+        user_id = str(principal.get("sub") or "").strip()
+        return [user_id] if user_id else []
+
+    if "pm:read" not in _principal_scopes(principal):
+        raise HTTPException(status_code=403, detail="PM guest token lacks read scope.")
+
+    team_id = str(principal.get("team_id") or "").strip()
+    if not team_id:
+        raise HTTPException(status_code=403, detail="PM guest token missing team scope.")
+
+    members = user_db.get_team_members(team_id)
+    return [str(member.get("id") or "").strip() for member in members if str(member.get("id") or "").strip()]
+
+
 async def _resolve_resurrection_snapshot(target: str, user_id: str) -> dict | None:
     normalized_target = (target or "").strip()
     if not normalized_target:
@@ -637,17 +677,50 @@ async def get_events(
 async def get_snapshot_timeline(
     limit: int = 200,
     projectId: str | None = None,
-    user_id: str = Depends(get_current_user),
+    principal: dict = Depends(get_current_principal),
 ):
     """Timeline feed for Shadow Graph time-travel (oldest -> newest)."""
-    _require_project_access(user_id=user_id, project_id=projectId)
+    role = str(principal.get("role") or "user")
+    if role == "pm_guest":
+        _require_pm_guest_project_access(principal=principal, project_id=projectId)
+    else:
+        user_id = str(principal.get("sub") or "")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload.")
+        _require_project_access(user_id=user_id, project_id=projectId)
+
     capped_limit = max(1, min(limit, 1000))
-    results = await vector_db.get_snapshot_timeline(limit=capped_limit, user_id=user_id, project_id=projectId)
+
+    user_ids = _resolve_timeline_user_ids(principal)
+    if not user_ids:
+        return {"timeline": []}
+
+    if len(user_ids) == 1:
+        results = await vector_db.get_snapshot_timeline(limit=capped_limit, user_id=user_ids[0], project_id=projectId)
+    else:
+        merged_results: list[dict] = []
+        for member_user_id in user_ids:
+            member_timeline = await vector_db.get_snapshot_timeline(
+                limit=capped_limit,
+                user_id=member_user_id,
+                project_id=projectId,
+            )
+            for row in member_timeline:
+                enriched = dict(row)
+                enriched["user_id"] = member_user_id
+                merged_results.append(enriched)
+
+        merged_results.sort(
+            key=lambda row: vector_db._timestamp_sort_key(row.get("timestamp")),
+            reverse=True,
+        )
+        results = merged_results[:capped_limit]
 
     timeline = []
     for r in results:
         timeline.append({
             "id": r.get("id"),
+            "user_id": r.get("user_id"),
             "timestamp": r.get("timestamp"),
             "active_file": r.get("active_file"),
             "git_branch": r.get("git_branch"),
@@ -743,10 +816,19 @@ async def handle_query(
         # Step 1: Plan - break the question into search tasks
         plan_result = await planner.plan(req.question, user_id=user_id)
 
-        # Step 2: Execute — synthesize and validate
+        # Step 2: Dual retrieval (facts + snapshots)
+        facts = await vector_db.recall_facts(req.question, top_k=5, user_id=user_id, min_salience=0.3)
+        retrieved_facts = [{"id": f.get("id"), "content": f.get("document"), "kind": f.get("kind"), "salience": f.get("salience")} for f in facts]
+        retrieved_snapshots = [{"id": item.get("id"), "timestamp": item.get("timestamp"), "file": item.get("activeFile"), "branch": item.get("gitBranch")} for item in plan_result.retrieved_context[:5]]
+
+        # Step 3: Execute — synthesize and validate
         response = await executor.synthesize(req.question, plan_result)
 
-        # Step 3: Persist history
+        # Step 4: Enrich response with retrieved facts and snapshots
+        response.retrieved_facts = retrieved_facts
+        response.retrieved_snapshots = retrieved_snapshots
+
+        # Step 5: Persist history
         user_db.save_chat_message(user_id, "user", req.question, session_id=session_id)
         user_db.save_chat_message(user_id, "assistant", response.summary, session_id=session_id)
 

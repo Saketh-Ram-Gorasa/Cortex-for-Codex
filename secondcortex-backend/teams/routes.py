@@ -216,6 +216,61 @@ async def generate_new_invite_code(team_id: str, user_id: str = Depends(get_curr
     return {"invite_code": code}
 
 
+class RenameTeamRequest(BaseModel):
+    name: str
+
+
+@router.patch("/{team_id}", response_model=TeamInfo)
+async def rename_team(team_id: str, req: RenameTeamRequest, user_id: str = Depends(get_current_user)):
+    """Rename a team. Only team lead can do this."""
+    try:
+        updated = user_db.rename_team(team_id, req.name.strip(), user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    logger.info(f"Team {team_id} renamed to '{req.name}' by {user_id}")
+    return TeamInfo(**updated)
+
+
+@router.delete("/{team_id}")
+async def delete_team(team_id: str, user_id: str = Depends(get_current_user)):
+    """Delete a team. Only team lead can do this. Cascade-clears all memberships."""
+    try:
+        user_db.delete_team(team_id, user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    logger.info(f"Team {team_id} deleted by {user_id}")
+    return {"status": "deleted", "team_id": team_id}
+
+
+@router.post("/{team_id}/leave")
+async def leave_team(team_id: str, user_id: str = Depends(get_current_user)):
+    """Leave a team. Team leads cannot leave — they must delete the team instead."""
+    try:
+        user_db.leave_team(user_id, team_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(f"User {user_id} left team {team_id}")
+    return {"status": "left", "team_id": team_id}
+
+
+@router.delete("/{team_id}/members/{member_id}")
+async def remove_member(team_id: str, member_id: str, user_id: str = Depends(get_current_user)):
+    """Remove a member from a team. Only team lead can do this."""
+    try:
+        user_db.remove_member(team_id, member_id, user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    logger.info(f"Member {member_id} removed from team {team_id} by {user_id}")
+    return {"status": "removed", "team_id": team_id, "member_id": member_id}
+
+
 @router.get("/{team_id}/members/{member_id}/snapshots", response_model=list[MemberSnapshot])
 async def get_member_snapshots(
     team_id: str,

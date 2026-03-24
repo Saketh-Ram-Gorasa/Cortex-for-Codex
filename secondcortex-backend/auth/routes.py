@@ -4,15 +4,18 @@ Auth API routes: signup, login, me.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel, EmailStr
 
 from auth.database import UserDB
 from auth.jwt_handler import create_token, create_pm_guest_token, get_current_principal, get_current_user
 from config import settings
+from projects.database import ProjectDB
 from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.auth.routes")
@@ -22,6 +25,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 # Shared DB instance
 user_db = UserDB()
 vector_db = VectorDBService()
+project_db = ProjectDB()
 
 
 class SignupRequest(BaseModel):
@@ -48,6 +52,34 @@ class MCPKeyResponse(BaseModel):
     api_key: str | None
 
 
+class MCPKeyIssueRequest(BaseModel):
+    name: str = "default"
+    scopes: list[str] = ["memory:read"]
+    ttl_days: int | None = None
+
+
+class MCPKeyMetadata(BaseModel):
+    key_id: str
+    name: str
+    scopes: list[str]
+    created_at: str | None = None
+    expires_at: str | None = None
+    last_used_at: str | None = None
+    is_revoked: bool
+
+
+class MCPKeyIssueResponse(BaseModel):
+    api_key: str
+    key_id: str
+    name: str
+    scopes: list[str]
+    expires_at: str
+
+
+class MCPKeyListResponse(BaseModel):
+    keys: list[MCPKeyMetadata]
+
+
 class MeResponse(BaseModel):
     user_id: str
     email: str
@@ -69,6 +101,81 @@ class GuestLoginResponse(BaseModel):
     email: str
     display_name: str
     team_id: str | None = None
+
+
+async def _bootstrap_secondcortex_project(team_id: str) -> None:
+    """Ensure a team-visible SecondCortex project exists and backfill snapshot project IDs."""
+    normalized_team_id = str(team_id or "").strip()
+    if not normalized_team_id:
+        return
+
+    members = user_db.get_team_members(normalized_team_id)
+    if not members:
+        return
+
+    team_info = user_db.get_team_info(normalized_team_id) or {}
+    team_lead_id = str(team_info.get("team_lead_id") or "").strip()
+    owner_user_id = team_lead_id or str(members[0].get("id") or "").strip()
+    if not owner_user_id:
+        return
+
+    existing = project_db.get_team_project_by_name(team_id=normalized_team_id, name="SecondCortex")
+    if existing:
+        project = existing
+    else:
+        project = project_db.create_project(
+            owner_user_id=owner_user_id,
+            name="SecondCortex",
+            visibility="team",
+            team_id=normalized_team_id,
+            workspace_name="SecondCortexLabs",
+        )
+        logger.info("Bootstrapped team project %s for team=%s", project.get("id"), normalized_team_id)
+
+    project_id = str(project.get("id") or "").strip()
+    if not project_id:
+        return
+
+    target_members = [
+        member for member in members
+        if "suh" in str(member.get("email") or "").lower()
+        or "sak" in str(member.get("email") or "").lower()
+        or "suh" in str(member.get("display_name") or "").lower()
+        or "sak" in str(member.get("display_name") or "").lower()
+    ]
+    if not target_members:
+        target_members = members
+
+    target_user_ids = [str(member.get("id") or "").strip() for member in target_members if member.get("id")]
+    if not target_user_ids:
+        return
+
+    sqlite_updated = user_db.assign_project_to_user_snapshots(target_user_ids, project_id)
+
+    chroma_updated = 0
+    for target_user_id in target_user_ids:
+        chroma_updated += await vector_db.assign_project_to_user_snapshots(
+            user_id=target_user_id,
+            project_id=project_id,
+            overwrite_existing=True,
+        )
+
+    logger.info(
+        "Project bootstrap complete team=%s project=%s users=%d sqlite_updated=%d chroma_updated=%d",
+        normalized_team_id,
+        project_id,
+        len(target_user_ids),
+        sqlite_updated,
+        chroma_updated,
+    )
+
+
+async def _bootstrap_secondcortex_project_safe(team_id: str) -> None:
+    """Run PM bootstrap without blocking or failing login responses."""
+    try:
+        await _bootstrap_secondcortex_project(team_id)
+    except Exception as exc:
+        logger.exception("PM bootstrap failed for team=%s: %s", team_id, exc)
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -113,10 +220,57 @@ async def login(req: LoginRequest):
 
 
 @router.post("/mcp-key", response_model=MCPKeyResponse)
-async def generate_mcp_key(user_id: str = Depends(get_current_user)):
-    """Generate a new MCP API key for the current user."""
-    new_key = user_db.generate_mcp_api_key(user_id)
-    return MCPKeyResponse(api_key=new_key)
+async def generate_mcp_key(
+    req: MCPKeyIssueRequest | None = Body(default=None),
+    user_id: str = Depends(get_current_user),
+):
+    """Generate a new MCP API key for the current user (legacy-compatible response)."""
+    payload = req or MCPKeyIssueRequest()
+    issued = user_db.issue_mcp_api_key(
+        user_id=user_id,
+        name=payload.name,
+        scopes=payload.scopes,
+        ttl_days=payload.ttl_days,
+    )
+    return MCPKeyResponse(api_key=issued["api_key"])
+
+
+@router.post("/mcp-keys", response_model=MCPKeyIssueResponse)
+async def issue_mcp_key(
+    req: MCPKeyIssueRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Issue a named scoped MCP API key with expiration metadata."""
+    issued = user_db.issue_mcp_api_key(
+        user_id=user_id,
+        name=req.name,
+        scopes=req.scopes,
+        ttl_days=req.ttl_days,
+    )
+    return MCPKeyIssueResponse(**issued)
+
+
+@router.get("/mcp-keys", response_model=MCPKeyListResponse)
+async def list_mcp_keys(user_id: str = Depends(get_current_user)):
+    """List all MCP API keys issued for the current user."""
+    keys = user_db.list_mcp_api_keys(user_id)
+    return MCPKeyListResponse(keys=[MCPKeyMetadata(**key) for key in keys])
+
+
+@router.delete("/mcp-keys/{key_id}")
+async def revoke_mcp_key(
+    key_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    """Revoke one MCP API key by key_id for the current user."""
+    revoked = user_db.revoke_mcp_api_key(user_id=user_id, key_id=key_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="MCP key not found")
+    return {
+        "status": "revoked",
+        "key_id": key_id,
+        "revoked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
 
 
 @router.get("/mcp-key", response_model=MCPKeyResponse)
@@ -145,7 +299,6 @@ async def pm_guest_login():
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no team is configured.")
 
     resolved_team_id: str | None = None
-    fallback_team_id: str | None = None
     for candidate in candidate_team_ids:
         team_info = user_db.get_team_info(candidate)
         if not team_info:
@@ -155,36 +308,14 @@ async def pm_guest_login():
         if not members:
             continue
 
-        # Keep a fallback in case snapshot stores are temporarily unavailable.
-        if fallback_team_id is None:
-            fallback_team_id = candidate
-
-        # Prefer teams where at least one member has snapshot history.
-        has_snapshot_activity = False
-        for member in members:
-            member_id = str(member.get("id") or "").strip()
-            if not member_id:
-                continue
-
-            timeline = await vector_db.get_snapshot_timeline(limit=1, user_id=member_id)
-            if timeline:
-                has_snapshot_activity = True
-                break
-
-            legacy_rows = user_db.get_user_snapshots(member_id, limit=1)
-            if legacy_rows:
-                has_snapshot_activity = True
-                break
-
-        if has_snapshot_activity:
-            resolved_team_id = candidate
-            break
-
-    if not resolved_team_id and fallback_team_id:
-        resolved_team_id = fallback_team_id
+        resolved_team_id = candidate
+        break
 
     if not resolved_team_id:
         raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")
+
+    # Keep login fast: bootstrap/backfill in background instead of blocking response.
+    asyncio.create_task(_bootstrap_secondcortex_project_safe(resolved_team_id))
 
     display_name = (settings.pm_guest_display_name or "PM Guest").strip()
     token = create_pm_guest_token(team_id=resolved_team_id, display_name=display_name)

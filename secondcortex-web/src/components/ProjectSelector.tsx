@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 
 interface ProjectItem {
   id: string;
@@ -27,77 +27,127 @@ export default function ProjectSelector({
   onSelectedNameChange,
 }: ProjectSelectorProps) {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const hasAutoSelected = useRef(false);
+  const hasBootstrappedDefault = useRef(false);
+
+  const stableOnChange = useCallback(onChange, [onChange]);
+  const stableOnNameChange = useCallback(onSelectedNameChange || (() => {}), [onSelectedNameChange]);
+
+  const normalizeName = (name: string) => name.toLowerCase().replace(/[\s\-_]/g, '');
+
+  const createDefaultSecondCortexProject = useCallback(async (): Promise<ProjectItem | null> => {
+    try {
+      const createRes = await fetch(`${backendUrl}/api/v1/projects`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'SecondCortex',
+          slug: 'secondcortex',
+          visibility: 'private',
+        }),
+      });
+
+      if (!createRes.ok) {
+        return null;
+      }
+
+      const created = (await createRes.json()) as ProjectItem;
+      return created;
+    } catch {
+      return null;
+    }
+  }, [backendUrl, token]);
 
   useEffect(() => {
     const loadProjects = async () => {
+      setLoading(true);
       try {
         const response = await fetch(`${backendUrl}/api/v1/projects`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!response.ok) {
+          setLoading(false);
           return;
         }
         const data = await response.json() as { projects?: ProjectItem[] };
-        const visibleProjects = (data.projects || []).filter((project) => !project.is_archived);
+        let visibleProjects = (data.projects || []).filter((project) => !project.is_archived);
+
+        let scProject = visibleProjects.find((p) => normalizeName(p.name).includes('secondcortex'));
+        if (!scProject && !hasBootstrappedDefault.current) {
+          hasBootstrappedDefault.current = true;
+          const created = await createDefaultSecondCortexProject();
+          if (created && !created.is_archived) {
+            visibleProjects = [created, ...visibleProjects.filter((p) => p.id !== created.id)];
+            scProject = created;
+          }
+        }
+
         setProjects(visibleProjects);
 
-        if (visibleProjects.length === 0) {
-          onSelectedNameChange?.(null);
-          if (selectedProjectId) {
-            onChange(null);
+        // If user already selected something valid, just sync the name
+        if (selectedProjectId) {
+          const match = visibleProjects.find((p) => p.id === selectedProjectId);
+          if (match) {
+            stableOnNameChange(match.name);
+            return;
           }
-          return;
         }
 
-        const selectedProject = visibleProjects.find((project) => project.id === selectedProjectId) || null;
-        if (selectedProject) {
-          onSelectedNameChange?.(selectedProject.name);
-          return;
-        }
+        // Auto-select only once: find a "secondcortex"-like project
+        if (!hasAutoSelected.current && visibleProjects.length > 0) {
+          hasAutoSelected.current = true;
 
-        onChange(visibleProjects[0].id);
-        onSelectedNameChange?.(visibleProjects[0].name);
+          if (scProject) {
+            stableOnChange(scProject.id);
+            stableOnNameChange(scProject.name);
+          } else {
+            // Don't auto-select a random project — default to "All Projects"
+            stableOnChange(null);
+            stableOnNameChange(null);
+          }
+        }
       } catch {
         setProjects([]);
-        onSelectedNameChange?.(null);
+        stableOnNameChange(null);
+      } finally {
+        setLoading(false);
       }
     };
 
     if (token) {
       loadProjects();
     }
-  }, [backendUrl, token, selectedProjectId, onChange, refreshKey, onSelectedNameChange]);
+  }, [backendUrl, token, refreshKey, selectedProjectId, stableOnChange, stableOnNameChange]);
 
-  const handleSelectChange = (nextProjectId: string) => {
-    const normalizedId = nextProjectId || null;
-    onChange(normalizedId);
-    const selectedProject = projects.find((project) => project.id === normalizedId) || null;
-    onSelectedNameChange?.(selectedProject?.name || null);
+  const handleSelectChange = (nextValue: string) => {
+    if (nextValue === '__all__' || !nextValue) {
+      stableOnChange(null);
+      stableOnNameChange(null);
+    } else {
+      stableOnChange(nextValue);
+      const match = projects.find((p) => p.id === nextValue);
+      stableOnNameChange(match?.name || null);
+    }
   };
 
   return (
     <select
-      value={selectedProjectId || ''}
+      value={selectedProjectId || '__all__'}
       onChange={(event) => handleSelectChange(event.target.value)}
-      style={{
-        border: '1px solid var(--border)',
-        background: 'var(--surface)',
-        color: 'var(--text)',
-        borderRadius: '8px',
-        padding: '8px 10px',
-        fontSize: '12px',
-        minWidth: '180px',
-      }}
+      className={`sc-navbar-select ${loading ? 'sc-shimmer-card' : ''}`}
+      disabled={loading}
+      aria-busy={loading}
     >
-      {projects.length === 0 ? (
-        <option value="">No Projects</option>
-      ) : (
-        projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))
-      )}
+      <option value="__all__">All Projects</option>
+      {projects.map((project) => (
+        <option key={project.id} value={project.id}>
+          {project.name}
+        </option>
+      ))}
     </select>
   );
 }

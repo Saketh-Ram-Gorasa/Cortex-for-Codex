@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth.database import UserDB
-from auth.jwt_handler import get_current_user
+from auth.jwt_handler import get_current_principal, get_current_user
 from models.schemas import ProjectResolveRequest, ProjectResolveResponse
 from projects.database import ProjectDB
 
@@ -86,7 +86,27 @@ def _normalize_project_response(project: dict) -> ProjectResponse:
 
 
 @router.get("", response_model=ProjectListResponse)
-async def list_projects(user_id: str = Depends(get_current_user)):
+async def list_projects(principal: dict = Depends(get_current_principal)):
+    role = str(principal.get("role") or "user")
+
+    if role == "pm_guest":
+        scopes = principal.get("scopes") or []
+        if isinstance(scopes, str):
+            scopes = [scopes]
+        if "pm:read" not in {str(scope) for scope in scopes}:
+            raise HTTPException(status_code=403, detail="PM guest token lacks read scope.")
+
+        team_id = str(principal.get("team_id") or "").strip()
+        if not team_id:
+            return {"projects": []}
+
+        projects = project_db.list_team_projects(team_id=team_id, include_archived=False)
+        return {"projects": [_normalize_project_response(project) for project in projects]}
+
+    user_id = str(principal.get("sub") or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload.")
+
     team_id = _resolve_user_team_id(user_id)
     projects = project_db.list_visible_projects(user_id=user_id, team_id=team_id)
     return {"projects": [_normalize_project_response(project) for project in projects]}
@@ -158,6 +178,21 @@ async def unarchive_project(project_id: str, user_id: str = Depends(get_current_
     if not updated:
         raise HTTPException(status_code=404, detail="Project not found")
     return _normalize_project_response(updated)
+
+
+@router.delete("/{project_id}")
+async def delete_project(project_id: str, user_id: str = Depends(get_current_user)):
+    existing = project_db.get_project_by_id(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if existing["owner_user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Only project owner can delete project")
+
+    deleted = project_db.delete_project(project_id=project_id, owner_user_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+    logger.info("Deleted project %s for user=%s", project_id, user_id)
+    return {"status": "deleted", "project_id": project_id}
 
 
 @router.post("/resolve", response_model=ProjectResolveResponse)

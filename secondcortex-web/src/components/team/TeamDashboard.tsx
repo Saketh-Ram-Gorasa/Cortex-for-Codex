@@ -347,7 +347,14 @@ export default function TeamDashboard({
         <div className="sc-dashboard-inner">
           <div className="sc-dashboard-panel">
             <div className="sc-dashboard-panel-inner" style={{ display: 'block' }}>
-              <p className="sc-dashboard-p">Loading team history and summaries...</p>
+              <div className="sc-shimmer-stack" aria-live="polite">
+                <div className="sc-shimmer-line xl w-40" />
+                <div className="sc-shimmer-line lg w-60" />
+                <div className="sc-shimmer-grid">
+                  <div className="sc-shimmer-card"><div className="sc-shimmer-line w-80" /></div>
+                  <div className="sc-shimmer-card"><div className="sc-shimmer-line w-80" /></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -533,7 +540,14 @@ export default function TeamDashboard({
                 placeholder="Ask team progress question"
               />
               <button className="query-btn" type="button" disabled={chatPending} onClick={() => void sendQuestion(question)}>
-                {chatPending ? 'Asking...' : 'Ask'}
+                  {chatPending ? (
+                    <>
+                      <span className="loading-ring" aria-hidden="true" />
+                      Asking…
+                    </>
+                  ) : (
+                    'Ask'
+                  )}
               </button>
             </div>
           </section>
