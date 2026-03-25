@@ -822,6 +822,68 @@ async def get_snapshot_timeline(
     return {"timeline": timeline}
 
 
+@app.post("/api/v1/snapshots/search")
+async def search_snapshots(
+    query: str = Body(..., embed=True),
+    projectId: str | None = None,
+    principal: dict = Depends(get_current_principal),
+):
+    """Semantic snapshot search using Azure AI Search with Chroma fallback."""
+    role = str(principal.get("role") or "user")
+    if role == "pm_guest":
+        _require_pm_guest_project_access(principal=principal, project_id=projectId)
+    else:
+        user_id = str(principal.get("sub") or "")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload.")
+        _require_project_access(user_id=user_id, project_id=projectId)
+
+    user_ids = _resolve_timeline_user_ids(principal)
+    if not user_ids:
+        return {"results": [], "count": 0}
+
+    if len(user_ids) == 1:
+        raw_results = await vector_db.semantic_search(
+            query=query,
+            top_k=10,
+            user_id=user_ids[0],
+            project_id=projectId,
+        )
+    else:
+        merged_results: list[dict] = []
+        for member_user_id in user_ids:
+            member_results = await vector_db.semantic_search(
+                query=query,
+                top_k=10,
+                user_id=member_user_id,
+                project_id=projectId,
+            )
+            for row in member_results:
+                enriched = dict(row)
+                enriched["user_id"] = member_user_id
+                merged_results.append(enriched)
+
+        merged_results.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+        raw_results = merged_results[:10]
+
+    results = [
+        {
+            "id": item.get("id"),
+            "user_id": item.get("user_id"),
+            "timestamp": item.get("timestamp"),
+            "active_file": item.get("active_file"),
+            "git_branch": item.get("git_branch"),
+            "project_id": item.get("project_id") or None,
+            "summary": item.get("summary"),
+            "entities": item.get("entities", "").split(",") if item.get("entities") else [],
+            "score": item.get("score"),
+        }
+        for item in raw_results
+    ]
+
+    return {"results": results, "count": len(results)}
+
+
 @app.get("/api/v1/snapshots/{snapshot_id}")
 async def get_snapshot_by_id(
     snapshot_id: str,
