@@ -675,6 +675,11 @@ async def ingest_git_history(
         request.max_pull_requests,
     )
 
+    if settings.project_scoped_ingestion_enabled and not request.project_id:
+        raise HTTPException(status_code=400, detail="projectId is required when project scoped ingestion is enabled")
+
+    _require_project_access(user_id=user_id, project_id=request.project_id)
+
     try:
         records, summary = git_ingestion.mine(
             repo_path=request.repo_path,
@@ -706,6 +711,7 @@ async def ingest_git_history(
                     language_id=record.language_id,
                     shadow_graph=record.shadow_graph,
                     git_branch=record.git_branch,
+                    project_id=request.project_id,
                     terminal_commands=record.terminal_commands,
                     metadata=metadata,
                 )

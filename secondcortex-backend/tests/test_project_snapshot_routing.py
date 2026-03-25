@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -85,3 +86,89 @@ def test_snapshot_rejected_without_project_id_when_project_mode_enabled(client: 
 
     assert response.status_code == 400
     assert "projectId" in response.json()["detail"]
+
+
+def test_retro_ingest_rejected_without_project_id_when_project_mode_enabled(client: TestClient, monkeypatch) -> None:
+    import main
+
+    headers = _signup_headers(client, "retro-proj-mode")
+    monkeypatch.setattr(main.settings, "project_scoped_ingestion_enabled", True)
+
+    response = client.post(
+        "/api/v1/ingest/git",
+        headers=headers,
+        json={
+            "repoPath": ".",
+            "maxCommits": 1,
+            "maxPullRequests": 0,
+            "includePullRequests": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "projectId" in response.json()["detail"]
+
+
+def test_retro_ingest_routes_snapshots_to_project(client: TestClient, monkeypatch) -> None:
+    import main
+
+    headers = _signup_headers(client, "retro-proj")
+    project_response = client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"name": "SusyDB Coldstart", "visibility": "private"},
+    )
+    assert project_response.status_code == 200
+    project_id = project_response.json()["id"]
+
+    class _FakeVectorDB:
+        def __init__(self) -> None:
+            self.received_project_id: str | None = None
+
+        async def generate_embedding(self, text: str) -> list[float]:
+            return [0.1, 0.2, 0.3]
+
+        async def upsert_snapshot(self, snapshot, user_id: str | None = None) -> None:
+            self.received_project_id = snapshot.project_id
+
+    fake_vector = _FakeVectorDB()
+    monkeypatch.setattr(main, "vector_db", fake_vector)
+
+    fake_record = SimpleNamespace(
+        id="r1",
+        timestamp=datetime.now(tz=timezone.utc),
+        workspace_folder="repo",
+        active_file="service.py",
+        language_id="python",
+        shadow_graph="def f():\n    return 1",
+        git_branch="main",
+        terminal_commands=[],
+        summary="Initial cold-start ingest snapshot",
+    )
+
+    fake_summary = SimpleNamespace(
+        repo="repo",
+        branch="main",
+        commit_count=1,
+        pr_count=0,
+        comment_count=0,
+        skipped_count=0,
+        warnings=[],
+    )
+
+    monkeypatch.setattr(main.git_ingestion, "mine", lambda **kwargs: ([fake_record], fake_summary))
+
+    response = client.post(
+        "/api/v1/ingest/git",
+        headers=headers,
+        json={
+            "repoPath": ".",
+            "maxCommits": 1,
+            "maxPullRequests": 0,
+            "includePullRequests": False,
+            "projectId": project_id,
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_vector.received_project_id == project_id
