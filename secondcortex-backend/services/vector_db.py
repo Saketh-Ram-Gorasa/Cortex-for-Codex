@@ -847,15 +847,40 @@ class VectorDBService:
         project_id: str | None = None,
     ) -> list[dict]:
         """Fetch a chronologically sorted timeline of snapshot metadata (newest first)."""
-        collection = self._get_collection(user_id)
-        if collection is None:
-            logger.warning("Chroma collection not available — returning empty timeline.")
-            return []
-
         cache_key = self._cache_key("timeline", user_id, project_id, limit)
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+
+        # PRIMARY: Azure AI Search direct recency retrieval
+        if self.azure_search is not None and user_id:
+            try:
+                azure_timeline = await self.azure_search.recent_snapshots(
+                    user_id=str(user_id),
+                    project_id=project_id,
+                    limit=limit,
+                )
+                if azure_timeline:
+                    logger.info(
+                        "Azure AI Search returned %d timeline items for user=%s",
+                        len(azure_timeline),
+                        user_id,
+                    )
+                    self._cache_set(cache_key, azure_timeline)
+                    return azure_timeline
+                logger.debug("Azure AI Search returned empty timeline; falling back to ChromaDB")
+            except Exception as azure_exc:
+                logger.warning(
+                    "Azure timeline retrieval failed: %s. Falling back to ChromaDB for user=%s",
+                    azure_exc,
+                    user_id,
+                )
+
+        # FALLBACK: Chroma timeline retrieval
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — returning empty timeline.")
+            return []
 
         attempted_recovery = False
         while True:

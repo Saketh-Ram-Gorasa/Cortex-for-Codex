@@ -39,6 +39,16 @@ class _FakeCollection:
         self.upsert_calls += 1
 
 
+class _FakeAzureSearch:
+    def __init__(self, results=None) -> None:
+        self.results = list(results or [])
+        self.calls: list[dict] = []
+
+    async def recent_snapshots(self, user_id: str, project_id: str | None, limit: int):
+        self.calls.append({"user_id": user_id, "project_id": project_id, "limit": limit})
+        return self.results[:limit]
+
+
 async def _fixed_embedding(_: str) -> list[float]:
     return [0.1, 0.2, 0.3]
 
@@ -100,3 +110,38 @@ def test_upsert_snapshot_clears_user_cache(monkeypatch):
 
     assert collection.upsert_calls == 1
     assert service._cache_get(cache_key) is None
+
+
+def test_get_snapshot_timeline_uses_azure_primary(monkeypatch):
+    service = VectorDBService()
+    collection = _FakeCollection()
+    azure = _FakeAzureSearch(
+        [
+            {"id": "az-1", "timestamp": "2026-03-23T10:00:00+00:00", "active_file": "a.py", "git_branch": "main"},
+            {"id": "az-2", "timestamp": "2026-03-23T09:00:00+00:00", "active_file": "b.py", "git_branch": "main"},
+        ]
+    )
+
+    monkeypatch.setattr(service, "azure_search", azure)
+    monkeypatch.setattr(service, "_get_collection", lambda _user_id=None: collection)
+
+    results = asyncio.run(service.get_snapshot_timeline(limit=2, user_id="u1", project_id="p1"))
+
+    assert [item["id"] for item in results] == ["az-1", "az-2"]
+    assert len(azure.calls) == 1
+    assert collection.get_calls == 0
+
+
+def test_get_snapshot_timeline_falls_back_to_chroma_when_azure_empty(monkeypatch):
+    service = VectorDBService()
+    collection = _FakeCollection()
+    azure = _FakeAzureSearch([])
+
+    monkeypatch.setattr(service, "azure_search", azure)
+    monkeypatch.setattr(service, "_get_collection", lambda _user_id=None: collection)
+
+    results = asyncio.run(service.get_snapshot_timeline(limit=2, user_id="u1", project_id="p1"))
+
+    assert len(azure.calls) == 1
+    assert collection.get_calls == 1
+    assert results[0]["id"] == "newer"

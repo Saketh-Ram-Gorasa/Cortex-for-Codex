@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from conftest import signup, create_team
 
+#just a sanity check to ensure test setup is working
 
 def test_create_team(client):
     """Create a team and verify response includes invite code."""

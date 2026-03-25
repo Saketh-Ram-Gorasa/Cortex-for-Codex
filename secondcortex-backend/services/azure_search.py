@@ -185,6 +185,80 @@ class AzureSearchService:
         
         return result if result is not None else []
 
+    async def recent_snapshots(
+        self,
+        user_id: str,
+        project_id: str | None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Fetch latest snapshots for a user (newest first) from Azure AI Search."""
+
+        safe_limit = max(1, min(int(limit), 500))
+
+        filters: list[str] = [f"user_id eq '{user_id}'"]
+        if project_id:
+            filters.append(f"project_id eq '{project_id}'")
+        filter_expr = " and ".join(filters)
+
+        def _search_with_order():
+            results = self.client.search(
+                search_text="*",
+                filter=filter_expr,
+                top=safe_limit,
+                order_by=["timestamp desc"],
+            )
+            return [
+                {
+                    "id": doc.get("id"),
+                    "summary": doc.get("summary", ""),
+                    "active_file": doc.get("active_file", ""),
+                    "project_id": doc.get("project_id"),
+                    "timestamp": doc.get("timestamp"),
+                    "git_branch": doc.get("git_branch", ""),
+                    "entities": doc.get("entities", ""),
+                    "score": float(doc.get("@search.score", 0.0) or 0.0),
+                }
+                for doc in results
+            ]
+
+        result = await self._retry_operation(
+            "recent_snapshots",
+            _search_with_order,
+        )
+        if result is not None:
+            return result
+
+        logger.warning(
+            "Azure Search recent_snapshots ordering failed for index '%s'; retrying without order_by",
+            self.index_name,
+        )
+
+        def _search_without_order():
+            results = self.client.search(
+                search_text="*",
+                filter=filter_expr,
+                top=safe_limit,
+            )
+            return [
+                {
+                    "id": doc.get("id"),
+                    "summary": doc.get("summary", ""),
+                    "active_file": doc.get("active_file", ""),
+                    "project_id": doc.get("project_id"),
+                    "timestamp": doc.get("timestamp"),
+                    "git_branch": doc.get("git_branch", ""),
+                    "entities": doc.get("entities", ""),
+                    "score": float(doc.get("@search.score", 0.0) or 0.0),
+                }
+                for doc in results
+            ]
+
+        fallback_result = await self._retry_operation(
+            "recent_snapshots_unordered",
+            _search_without_order,
+        )
+        return fallback_result if fallback_result is not None else []
+
     async def index_snapshot(self, snapshot: dict[str, Any]) -> bool:
         """Index a snapshot with retry logic and dimension validation."""
         
