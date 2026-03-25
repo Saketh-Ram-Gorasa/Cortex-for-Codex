@@ -83,6 +83,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                             break;
                         }
 
+                        if (!this.ensureProjectSelectedForIngestion()) {
+                            break;
+                        }
+
                         if (!sessionId) {
                             const createdSessionId = await this.backend.createChatSession('Quick Note');
                             if (createdSessionId) {
@@ -199,6 +203,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         break;
                     }
 
+                    if (!this.ensureProjectSelectedForIngestion()) {
+                        break;
+                    }
+
                     this.postMessage({ type: 'loading' });
                     const ingested = await this.backend.ingestNote(note, this.getSelectedProjectId?.());
                     if (ingested) {
@@ -217,6 +225,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'uploadDocument': {
+                    if (!this.ensureProjectSelectedForIngestion()) {
+                        break;
+                    }
+
                     const selected = await vscode.window.showOpenDialog({
                         canSelectMany: false,
                         openLabel: 'Upload to SecondCortex',
@@ -363,6 +375,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private postMessage(message: Record<string, unknown>): void {
         this._view?.webview.postMessage(message);
+    }
+
+    private ensureProjectSelectedForIngestion(): boolean {
+        const projectId = this.getSelectedProjectId?.();
+        if (projectId) {
+            return true;
+        }
+
+        this.postMessage({
+            type: 'error',
+            message: 'Select a project before ingesting notes or documents.',
+        });
+        this.onSelectProject?.();
+        return false;
     }
 
     private formatAssistantResponse(
