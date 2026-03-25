@@ -10,6 +10,7 @@ uvicorn = {version = ">=0.27.0", extras = ["standard"]}
 openai = ">=1.12.0"
 azure-search-documents = ">=11.4.0"
 azure-identity = ">=1.15.0"
+azure-cosmos = ">=4.7.0"
 pydantic = ">=2.5.0"
 pydantic-settings = ">=2.1.0"
 python-dotenv = ">=1.0.0"
