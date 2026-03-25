@@ -70,6 +70,8 @@ class VectorDBService:
         self._cache_ttl_seconds = 30
         self._cache_max_entries = 512
         self._collection_aliases: dict[str, str] = {}
+        self._failover_last_switch_at: dict[str, float] = {}
+        self._failover_cooldown_seconds = 300
         
         # Initialize PRIMARY Azure services
         self.azure_search = self._init_azure_search_service()
@@ -172,7 +174,23 @@ class VectorDBService:
         """
         user_key = self._collection_user_key(user_id)
         base_name = self._base_collection_name(user_id)
-        failover_name = self._safe_collection_name(f"{base_name}-recovery-{int(time.time())}")
+        now = time.time()
+        existing_alias = self._collection_aliases.get(user_key) or ""
+        last_switch_at = self._failover_last_switch_at.get(user_key, 0.0)
+
+        if "recovery" in existing_alias.lower() and (now - last_switch_at) < self._failover_cooldown_seconds:
+            logger.warning(
+                "Chroma compactor failure repeated for user=%s, reusing existing failover collection '%s' "
+                "(cooldown %ds). error=%s",
+                user_id or "default",
+                existing_alias,
+                self._failover_cooldown_seconds,
+                reason,
+            )
+            self._clear_user_cache(user_id)
+            return
+
+        failover_name = self._safe_collection_name(f"{base_name}-recovery-{int(now)}")
         
         # Try to migrate data from old collection to failover collection
         try:
@@ -219,6 +237,7 @@ class VectorDBService:
         
         # Update alias to point to new collection
         self._collection_aliases[user_key] = failover_name
+        self._failover_last_switch_at[user_key] = now
         self._clear_user_cache(user_id)
         logger.error(
             "Detected Chroma metadata compactor failure for user=%s. Switching to failover collection '%s'. error=%s",

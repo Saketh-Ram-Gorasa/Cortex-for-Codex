@@ -47,9 +47,12 @@ class AzureSearchService:
             now = time.time()
             if self._health_check_passed and (now - self._last_health_check) < 30:
                 return True
-            
-            # Simple health check: try to get index stats
-            index = self.client.get_service_statistics()
+
+            # Simple health check: run a minimal query against the configured index.
+            # SearchClient doesn't expose get_service_statistics; this call validates
+            # endpoint, key, and index availability with minimal payload.
+            results = self.client.search(search_text="*", top=1)
+            next(iter(results), None)
             self._last_health_check = now
             self._health_check_passed = True
             logger.debug("Azure Search health check passed")
