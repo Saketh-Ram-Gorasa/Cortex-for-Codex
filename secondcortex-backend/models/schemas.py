@@ -303,6 +303,7 @@ class RetroIngestRequest(BaseModel):
     max_commits: int = Field(120, alias="maxCommits")
     max_pull_requests: int = Field(30, alias="maxPullRequests")
     include_pull_requests: bool = Field(True, alias="includePullRequests")
+    project_id: str | None = Field(None, alias="projectId")
 
     model_config = {"populate_by_name": True}
 

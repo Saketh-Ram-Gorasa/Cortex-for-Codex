@@ -28,6 +28,9 @@
     "*"
   ],
   "main": "./out/extension.js",
+  "bin": {
+    "cortex": "./bin/cortex.js"
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
