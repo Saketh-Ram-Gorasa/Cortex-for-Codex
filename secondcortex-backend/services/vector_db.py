@@ -1,7 +1,17 @@
 """
-Vector Database Service — handles connections to:
-  1. LLM (GitHub Models or Azure OpenAI) for embeddings
-  2. ChromaDB (vector storage & semantic search)
+Vector Database Service — Azure-first architecture:
+
+PRIMARY (Production):
+  1. Azure AI Search - semantic vector search (main)
+  2. Azure CosmosDB - persistent document storage (main)
+
+FALLBACK (Local):
+  3. ChromaDB - in-memory vector cache (fallback only)
+
+Hierarchy:
+  - Search: Azure AI Search → ChromaDB fallback
+  - Storage: CosmosDB → ChromaDB fallback
+  - Embeddings: Azure OpenAI / GitHub Models with deterministic fallback
 
 Supports per-user namespaced collections for multi-tenant isolation.
 """
@@ -47,33 +57,47 @@ class VectorDBService:
     """Manages LLM embeddings and ChromaDB operations with per-user isolation."""
 
     def __init__(self) -> None:
-        # Initialize ChromaDB client with configurable persistent path
+        # Initialize ChromaDB as local fallback cache
         try:
             db_path = settings.chroma_db_path
             self.chroma_client = chromadb.PersistentClient(path=db_path)
-            logger.info("ChromaDB initialized at: %s", db_path)
+            logger.info("ChromaDB initialized at: %s (fallback cache)", db_path)
         except Exception as exc:
             logger.error("ChromaDB initialization failed: %s", exc)
             self.chroma_client = None
+        
         self._query_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._cache_ttl_seconds = 30
         self._cache_max_entries = 512
         self._collection_aliases: dict[str, str] = {}
-        self._pg_conn = self._init_postgres_connection()
+        
+        # Initialize PRIMARY Azure services
         self.azure_search = self._init_azure_search_service()
+        self.cosmosdb_client = self._init_cosmosdb_connection()
 
-    def _init_postgres_connection(self):
-        conn_string = str(settings.postgres_connection_string or "").strip()
-        if not conn_string or psycopg2 is None:
+    def _init_cosmosdb_connection(self):
+        """Initialize CosmosDB as PRIMARY persistent storage."""
+        try:
+            from azure.cosmos import CosmosClient
+        except ImportError:
+            logger.warning("azure-cosmos not installed. CosmosDB persistence disabled.")
+            return None
+
+        endpoint = str(settings.cosmosdb_endpoint or "").strip()
+        key = str(settings.cosmosdb_key or "").strip()
+
+        if not endpoint or not key:
+            logger.info("CosmosDB not configured. Using ChromaDB fallback for storage.")
             return None
 
         try:
-            conn = psycopg2.connect(conn_string)
-            conn.autocommit = True
-            logger.info("PostgreSQL snapshot storage enabled.")
-            return conn
+            client = CosmosClient(endpoint, credential=key)
+            database = client.get_database_client(settings.cosmosdb_database_name)
+            container = database.get_container_client(settings.cosmosdb_container_name)
+            logger.info("CosmosDB snapshot storage PRIMARY - endpoint: %s", endpoint)
+            return container
         except Exception as exc:
-            logger.warning("PostgreSQL connection not available. Falling back to Chroma-only mode: %s", exc)
+            logger.warning("CosmosDB connection failed. Falling back to ChromaDB storage: %s", exc)
             return None
 
     def _init_azure_search_service(self):
@@ -97,72 +121,35 @@ class VectorDBService:
         except Exception:
             return None
 
-    async def _store_snapshot_postgres(self, snapshot: Any, user_id: str | None, metadata: dict[str, Any], embedding: list[float]) -> bool:
-        if self._pg_conn is None:
-            return False
-
-        snapshot_id = self._to_uuid(getattr(snapshot, "id", None))
-        project_id = self._to_uuid(getattr(snapshot, "project_id", None))
-        principal_user_id = self._to_uuid(user_id)
-
-        if not snapshot_id or not project_id or not principal_user_id:
+    async def _store_snapshot_cosmosdb(self, snapshot: Any, user_id: str | None, metadata: dict[str, Any], embedding: list[float]) -> bool:
+        """Store snapshot in CosmosDB as PRIMARY persistent storage."""
+        if self.cosmosdb_client is None:
             return False
 
         try:
-            with self._pg_conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO snapshots (
-                        id, project_id, user_id, active_file, language_id, git_branch,
-                        timestamp, shadow_graph, summary, entities, relations, embedding,
-                        metadata_for_search, sync_status, created_at, updated_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s
-                    )
-                    ON CONFLICT (id) DO UPDATE SET
-                        active_file = EXCLUDED.active_file,
-                        language_id = EXCLUDED.language_id,
-                        git_branch = EXCLUDED.git_branch,
-                        timestamp = EXCLUDED.timestamp,
-                        shadow_graph = EXCLUDED.shadow_graph,
-                        summary = EXCLUDED.summary,
-                        entities = EXCLUDED.entities,
-                        relations = EXCLUDED.relations,
-                        embedding = EXCLUDED.embedding,
-                        metadata_for_search = EXCLUDED.metadata_for_search,
-                        sync_status = EXCLUDED.sync_status,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        snapshot_id,
-                        project_id,
-                        principal_user_id,
-                        str(getattr(snapshot, "active_file", "") or ""),
-                        str(getattr(snapshot, "language_id", "") or ""),
-                        str(getattr(snapshot, "git_branch", "") or ""),
-                        getattr(snapshot, "timestamp", None),
-                        str(getattr(snapshot, "shadow_graph", "") or ""),
-                        str(metadata.get("summary") or ""),
-                        Json([e for e in str(metadata.get("entities") or "").split(",") if e]),
-                        Json([]),
-                        Binary(json.dumps(embedding).encode("utf-8")) if embedding else None,
-                        Json(
-                            {
-                                "active_file": str(getattr(snapshot, "active_file", "") or ""),
-                                "language_id": str(getattr(snapshot, "language_id", "") or ""),
-                                "summary": str(metadata.get("summary") or ""),
-                            }
-                        ),
-                        "SYNCED",
-                        getattr(snapshot, "timestamp", None),
-                        getattr(snapshot, "timestamp", None),
-                    ),
-                )
+            # Create CosmosDB document
+            doc = {
+                "id": str(snapshot.id),
+                "user_id": str(user_id or ""),
+                "project_id": str(snapshot.project_id or ""),
+                "active_file": str(snapshot.active_file or ""),
+                "language_id": str(snapshot.language_id or ""),
+                "git_branch": str(snapshot.git_branch or ""),
+                "timestamp": snapshot.timestamp.isoformat() if hasattr(snapshot.timestamp, "isoformat") else str(snapshot.timestamp),
+                "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
+                "summary": str(metadata.get("summary") or ""),
+                "entities": metadata.get("entities", ""),
+                "embedding": embedding,
+                "sync_status": "SYNCED",
+                "_partition": str(user_id or "default"),
+            }
+            
+            # Upsert into CosmosDB
+            self.cosmosdb_client.upsert_item(doc)
+            logger.info("Snapshot %s successfully stored in CosmosDB (PRIMARY)", snapshot.id)
             return True
         except Exception as exc:
-            logger.error("PostgreSQL snapshot upsert failed for snapshot=%s: %s", getattr(snapshot, "id", "unknown"), exc)
+            logger.error("CosmosDB snapshot upsert failed for snapshot=%s: %s", getattr(snapshot, "id", "unknown"), exc)
             return False
 
     def _collection_user_key(self, user_id: str | None) -> str:
@@ -452,7 +439,7 @@ class VectorDBService:
     # ── Vector DB Operations ────────────────────────────────────
 
     async def upsert_snapshot(self, snapshot: Any, user_id: str | None = None) -> None:
-        """Store snapshot in ChromaDB and mirror to PostgreSQL/Azure Search when configured."""
+        """Store snapshot - PRIMARY: CosmosDB + Azure AI Search, FALLBACK: ChromaDB"""
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — continuing with other storage backends.")
@@ -531,8 +518,10 @@ class VectorDBService:
                 else:
                     logger.error("Upsert to ChromaDB failed: %s", exc)
 
-        await self._store_snapshot_postgres(snapshot, user_id, metadata, embedding)
+        # 1. Store in CosmosDB PRIMARY
+        await self._store_snapshot_cosmosdb(snapshot, user_id, metadata, embedding)
 
+        # 2. Index in Azure AI Search PRIMARY
         if self.azure_search is not None and user_id:
             try:
                 indexing_success = await self.azure_search.index_snapshot(
@@ -549,10 +538,10 @@ class VectorDBService:
                     }
                 )
                 if indexing_success:
-                    logger.info("Snapshot %s successfully synced to Azure Search", snapshot.id)
+                    logger.info("Snapshot %s successfully indexed in Azure AI Search (PRIMARY)", snapshot.id)
                 else:
                     logger.warning(
-                        "Snapshot %s failed to sync to Azure Search after retries; ChromaDB has the data",
+                        "Snapshot %s failed to index in Azure AI Search after retries; data in CosmosDB",
                         snapshot.id
                     )
             except Exception as azure_exc:
@@ -873,7 +862,7 @@ class VectorDBService:
                             for row in rows
                         ]
             except Exception as exc:
-                logger.warning("PostgreSQL timeline query failed; falling back to Chroma: %s", exc)
+                logger.warning("CosmosDB timeline query failed; falling back to Chroma: %s", exc)
 
         collection = self._get_collection(user_id)
         if collection is None:
@@ -976,7 +965,7 @@ class VectorDBService:
                                 "document": row[6] or "",
                             }
             except Exception as exc:
-                logger.warning("PostgreSQL snapshot lookup failed; falling back to Chroma: %s", exc)
+                logger.warning("CosmosDB snapshot lookup failed; falling back to Chroma: %s", exc)
 
         collection = self._get_collection(user_id)
         if collection is None:

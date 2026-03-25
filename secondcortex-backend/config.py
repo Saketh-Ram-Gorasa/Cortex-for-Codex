@@ -88,15 +88,18 @@ class Settings(BaseSettings):
     llm_rate_limit_github_models_per_minute: int = Field(60, validation_alias="LLM_RATE_LIMIT_GITHUB_MODELS_PER_MINUTE")
     llm_rate_limit_max_retries: int = Field(2, validation_alias="LLM_RATE_LIMIT_MAX_RETRIES")
 
-    # ChromaDB storage
+    # ChromaDB storage (fallback local cache only)
     # Azure App Service persistent path: /home/chroma_db
     # Local default: ./chroma_db
     chroma_db_path: str = "./chroma_db"
 
-    # PostgreSQL snapshot storage (optional; falls back to Chroma when unset)
-    postgres_connection_string: str = Field("", validation_alias="POSTGRES_CONNECTION_STRING")
+    # Azure CosmosDB (PRIMARY persistent storage)
+    cosmosdb_endpoint: str = Field("", validation_alias="COSMOSDB_ENDPOINT")
+    cosmosdb_key: str = Field("", validation_alias="COSMOSDB_KEY")
+    cosmosdb_database_name: str = Field("secondcortex", validation_alias="COSMOSDB_DATABASE_NAME")
+    cosmosdb_container_name: str = Field("snapshots", validation_alias="COSMOSDB_CONTAINER_NAME")
 
-    # Azure AI Search (optional; falls back to Chroma semantic search when unset)
+    # Azure AI Search (PRIMARY vector search)
     azure_search_endpoint: str = Field("", validation_alias="AZURE_SEARCH_ENDPOINT")
     azure_search_api_key: str = Field("", validation_alias="AZURE_SEARCH_API_KEY")
     azure_search_index_name: str = Field("snapshots", validation_alias="AZURE_SEARCH_INDEX_NAME")
