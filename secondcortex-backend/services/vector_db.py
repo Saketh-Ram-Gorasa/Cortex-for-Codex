@@ -828,42 +828,6 @@ class VectorDBService:
         project_id: str | None = None,
     ) -> list[dict]:
         """Fetch a chronologically sorted timeline of snapshot metadata (newest first)."""
-        if self._pg_conn is not None and user_id:
-            try:
-                user_uuid = self._to_uuid(user_id)
-                if user_uuid:
-                    with self._pg_conn.cursor() as cur:
-                        query = """
-                            SELECT id, timestamp, active_file, summary, git_branch, project_id
-                            FROM snapshots
-                            WHERE user_id = %s
-                        """
-                        params: list[Any] = [user_uuid]
-                        if project_id:
-                            project_uuid = self._to_uuid(project_id)
-                            if project_uuid:
-                                query += " AND project_id = %s"
-                                params.append(project_uuid)
-                        query += " ORDER BY timestamp DESC LIMIT %s"
-                        params.append(limit)
-
-                        cur.execute(query, params)
-                        rows = cur.fetchall() or []
-                        return [
-                            {
-                                "id": str(row[0]),
-                                "timestamp": row[1].isoformat() if row[1] else None,
-                                "active_file": row[2],
-                                "summary": row[3],
-                                "git_branch": row[4],
-                                "project_id": str(row[5]) if row[5] else None,
-                                "entities": "",
-                            }
-                            for row in rows
-                        ]
-            except Exception as exc:
-                logger.warning("CosmosDB timeline query failed; falling back to Chroma: %s", exc)
-
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — returning empty timeline.")
@@ -938,35 +902,6 @@ class VectorDBService:
 
     async def get_snapshot_by_id(self, snapshot_id: str, user_id: str | None = None) -> dict | None:
         """Fetch one snapshot by ID from Chroma metadata/documents."""
-        if self._pg_conn is not None and user_id:
-            try:
-                snapshot_uuid = self._to_uuid(snapshot_id)
-                user_uuid = self._to_uuid(user_id)
-                if snapshot_uuid and user_uuid:
-                    with self._pg_conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            SELECT id, timestamp, active_file, git_branch, project_id, summary, shadow_graph
-                            FROM snapshots
-                            WHERE id = %s AND user_id = %s
-                            LIMIT 1
-                            """,
-                            (snapshot_uuid, user_uuid),
-                        )
-                        row = cur.fetchone()
-                        if row:
-                            return {
-                                "id": str(row[0]),
-                                "timestamp": row[1].isoformat() if row[1] else None,
-                                "active_file": row[2],
-                                "git_branch": row[3],
-                                "project_id": str(row[4]) if row[4] else None,
-                                "summary": row[5],
-                                "document": row[6] or "",
-                            }
-            except Exception as exc:
-                logger.warning("CosmosDB snapshot lookup failed; falling back to Chroma: %s", exc)
-
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — snapshot lookup skipped.")
