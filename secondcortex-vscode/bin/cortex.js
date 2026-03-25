@@ -23,6 +23,7 @@ Commands:
 
 Examples:
     cortex ingest --project-id proj_123
+        cortex ingest --project-name "SusyDB Test"
     cortex ingest --repo-path . --project-id proj_123 --max-commits 250
   cortex resurrect
   cortex resurrect feature/auth-fix
@@ -61,11 +62,6 @@ if (command === 'resurrect') {
 } else if (command === 'ingest') {
     const parsed = parseIngestArgs(args.slice(1));
 
-    if (!parsed.projectId) {
-        console.error('❌ Missing required argument: --project-id <id>');
-        process.exit(1);
-    }
-
     const backendUrl = (parsed.backendUrl || process.env.SECONDCORTEX_BACKEND_URL || 'http://localhost:8000').replace(/\/$/, '');
     const token = parsed.token || process.env.SECONDCORTEX_TOKEN || process.env.SECONDCORTEX_AUTH_TOKEN;
 
@@ -74,61 +70,11 @@ if (command === 'resurrect') {
         process.exit(1);
     }
 
-    const payload = {
-        repoPath: path.resolve(parsed.repoPath || process.cwd()),
-        maxCommits: parsed.maxCommits,
-        maxPullRequests: parsed.maxPullRequests,
-        includePullRequests: parsed.includePullRequests,
-        projectId: parsed.projectId,
-    };
-
-    console.log(`[SecondCortex] Starting cold-start ingest for ${payload.repoPath}`);
-    console.log(`[SecondCortex] Target project: ${payload.projectId}`);
-
-    fetch(`${backendUrl}/api/v1/ingest/git`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-    })
-        .then(async (res) => {
-            const text = await res.text();
-            if (!res.ok) {
-                console.error(`❌ Ingest failed (${res.status} ${res.statusText})`);
-                console.error(text || 'No response body');
-                process.exit(1);
-            }
-
-            let data = {};
-            try {
-                data = text ? JSON.parse(text) : {};
-            } catch {
-                data = { raw: text };
-            }
-
-            const ingested = Number(data.ingestedCount || 0);
-            const commits = Number(data.commitCount || 0);
-            const prs = Number(data.prCount || 0);
-            const skipped = Number(data.skippedCount || 0);
-
-            console.log('✅ Cold-start ingest completed.');
-            console.log(`   ingestedCount=${ingested} commitCount=${commits} prCount=${prs} skippedCount=${skipped}`);
-
-            const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-            if (warnings.length > 0) {
-                console.log('⚠️ Warnings:');
-                for (const warning of warnings) {
-                    console.log(`   - ${warning}`);
-                }
-            }
-        })
-        .catch((err) => {
-            console.error('❌ Failed to call backend ingest endpoint.');
-            console.error(err && err.message ? err.message : String(err));
-            process.exit(1);
-        });
+    runIngest(parsed, backendUrl, token).catch((err) => {
+        console.error('❌ Failed to run cortex ingest.');
+        console.error(err && err.message ? err.message : String(err));
+        process.exit(1);
+    });
 } else {
     console.error(`Unknown command: ${command}`);
     process.exit(1);
@@ -138,6 +84,7 @@ function parseIngestArgs(ingestArgs) {
     const parsed = {
         repoPath: process.cwd(),
         projectId: '',
+        projectName: '',
         backendUrl: process.env.SECONDCORTEX_BACKEND_URL || '',
         token: process.env.SECONDCORTEX_TOKEN || process.env.SECONDCORTEX_AUTH_TOKEN || '',
         maxCommits: 300,
@@ -156,6 +103,11 @@ function parseIngestArgs(ingestArgs) {
         }
         if (arg === '--project-id' && next) {
             parsed.projectId = next;
+            index += 1;
+            continue;
+        }
+        if ((arg === '--project-name' || arg === '--project') && next) {
+            parsed.projectName = next;
             index += 1;
             continue;
         }
@@ -192,4 +144,107 @@ function parseIngestArgs(ingestArgs) {
     }
 
     return parsed;
+}
+
+async function runIngest(parsed, backendUrl, token) {
+    let resolvedProjectId = (parsed.projectId || '').trim();
+    if (!resolvedProjectId && parsed.projectName) {
+        resolvedProjectId = await resolveProjectIdByName({
+            backendUrl,
+            token,
+            projectName: parsed.projectName,
+        });
+    }
+
+    if (!resolvedProjectId) {
+        throw new Error('Missing required target project. Use --project-id <id> or --project-name "<name>".');
+    }
+
+    const payload = {
+        repoPath: path.resolve(parsed.repoPath || process.cwd()),
+        maxCommits: parsed.maxCommits,
+        maxPullRequests: parsed.maxPullRequests,
+        includePullRequests: parsed.includePullRequests,
+        projectId: resolvedProjectId,
+    };
+
+    console.log(`[SecondCortex] Starting cold-start ingest for ${payload.repoPath}`);
+    console.log(`[SecondCortex] Target project: ${payload.projectId}`);
+
+    const response = await fetch(`${backendUrl}/api/v1/ingest/git`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+        throw new Error(`Ingest failed (${response.status} ${response.statusText}): ${text || 'No response body'}`);
+    }
+
+    let data = {};
+    try {
+        data = text ? JSON.parse(text) : {};
+    } catch {
+        data = { raw: text };
+    }
+
+    const ingested = Number(data.ingestedCount || 0);
+    const commits = Number(data.commitCount || 0);
+    const prs = Number(data.prCount || 0);
+    const skipped = Number(data.skippedCount || 0);
+
+    console.log('✅ Cold-start ingest completed.');
+    console.log(`   ingestedCount=${ingested} commitCount=${commits} prCount=${prs} skippedCount=${skipped}`);
+
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    if (warnings.length > 0) {
+        console.log('⚠️ Warnings:');
+        for (const warning of warnings) {
+            console.log(`   - ${warning}`);
+        }
+    }
+}
+
+async function resolveProjectIdByName({ backendUrl, token, projectName }) {
+    const normalizedTarget = String(projectName || '').trim().toLowerCase();
+    if (!normalizedTarget) {
+        return '';
+    }
+
+    const response = await fetch(`${backendUrl}/api/v1/projects`, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+        },
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+        throw new Error(`Unable to list projects (${response.status} ${response.statusText}): ${text || 'No response body'}`);
+    }
+
+    let data = {};
+    try {
+        data = text ? JSON.parse(text) : {};
+    } catch {
+        throw new Error('Project lookup returned non-JSON response.');
+    }
+
+    const projects = Array.isArray(data.projects) ? data.projects : [];
+    const exactMatches = projects.filter((project) => String(project.name || '').trim().toLowerCase() === normalizedTarget);
+
+    if (exactMatches.length === 1) {
+        return String(exactMatches[0].id || '').trim();
+    }
+
+    if (exactMatches.length > 1) {
+        const ids = exactMatches.map((project) => String(project.id || '').trim()).filter(Boolean);
+        throw new Error(`Project name "${projectName}" is ambiguous. Use --project-id explicitly. Matches: ${ids.join(', ')}`);
+    }
+
+    throw new Error(`Project name "${projectName}" not found. Create it first or use --project-id.`);
 }
