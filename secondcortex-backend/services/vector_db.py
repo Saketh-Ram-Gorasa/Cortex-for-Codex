@@ -13,13 +13,32 @@ import json
 import hashlib
 import random
 import time
+import uuid
 from typing import Any
 
 import chromadb
 
+try:
+    import psycopg2
+    from psycopg2 import Binary
+    from psycopg2.extras import Json
+except Exception:
+    psycopg2 = None
+
+    def Binary(value):
+        return value
+
+    def Json(value):
+        return value
+
 from config import settings
 from services.llm_client import task_embedding_create
 from services.external_ingest import ExternalMemoryRecord
+
+try:
+    from services.azure_search import AzureSearchService
+except Exception:
+    AzureSearchService = None
 
 logger = logging.getLogger("secondcortex.vectordb")
 
@@ -40,6 +59,111 @@ class VectorDBService:
         self._cache_ttl_seconds = 30
         self._cache_max_entries = 512
         self._collection_aliases: dict[str, str] = {}
+        self._pg_conn = self._init_postgres_connection()
+        self.azure_search = self._init_azure_search_service()
+
+    def _init_postgres_connection(self):
+        conn_string = str(settings.postgres_connection_string or "").strip()
+        if not conn_string or psycopg2 is None:
+            return None
+
+        try:
+            conn = psycopg2.connect(conn_string)
+            conn.autocommit = True
+            logger.info("PostgreSQL snapshot storage enabled.")
+            return conn
+        except Exception as exc:
+            logger.warning("PostgreSQL connection not available. Falling back to Chroma-only mode: %s", exc)
+            return None
+
+    def _init_azure_search_service(self):
+        endpoint = str(settings.azure_search_endpoint or "").strip()
+        api_key = str(settings.azure_search_api_key or "").strip()
+        index_name = str(settings.azure_search_index_name or "snapshots").strip() or "snapshots"
+
+        if not endpoint or not api_key or AzureSearchService is None:
+            return None
+
+        try:
+            logger.info("Azure AI Search vector retrieval enabled for index '%s'.", index_name)
+            return AzureSearchService(endpoint=endpoint, api_key=api_key, index_name=index_name)
+        except Exception as exc:
+            logger.warning("Azure AI Search initialization failed. Falling back to Chroma search: %s", exc)
+            return None
+
+    def _to_uuid(self, value: Any) -> uuid.UUID | None:
+        try:
+            return uuid.UUID(str(value))
+        except Exception:
+            return None
+
+    async def _store_snapshot_postgres(self, snapshot: Any, user_id: str | None, metadata: dict[str, Any], embedding: list[float]) -> bool:
+        if self._pg_conn is None:
+            return False
+
+        snapshot_id = self._to_uuid(getattr(snapshot, "id", None))
+        project_id = self._to_uuid(getattr(snapshot, "project_id", None))
+        principal_user_id = self._to_uuid(user_id)
+
+        if not snapshot_id or not project_id or not principal_user_id:
+            return False
+
+        try:
+            with self._pg_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO snapshots (
+                        id, project_id, user_id, active_file, language_id, git_branch,
+                        timestamp, shadow_graph, summary, entities, relations, embedding,
+                        metadata_for_search, sync_status, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s
+                    )
+                    ON CONFLICT (id) DO UPDATE SET
+                        active_file = EXCLUDED.active_file,
+                        language_id = EXCLUDED.language_id,
+                        git_branch = EXCLUDED.git_branch,
+                        timestamp = EXCLUDED.timestamp,
+                        shadow_graph = EXCLUDED.shadow_graph,
+                        summary = EXCLUDED.summary,
+                        entities = EXCLUDED.entities,
+                        relations = EXCLUDED.relations,
+                        embedding = EXCLUDED.embedding,
+                        metadata_for_search = EXCLUDED.metadata_for_search,
+                        sync_status = EXCLUDED.sync_status,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        snapshot_id,
+                        project_id,
+                        principal_user_id,
+                        str(getattr(snapshot, "active_file", "") or ""),
+                        str(getattr(snapshot, "language_id", "") or ""),
+                        str(getattr(snapshot, "git_branch", "") or ""),
+                        getattr(snapshot, "timestamp", None),
+                        str(getattr(snapshot, "shadow_graph", "") or ""),
+                        str(metadata.get("summary") or ""),
+                        Json([e for e in str(metadata.get("entities") or "").split(",") if e]),
+                        Json([]),
+                        Binary(json.dumps(embedding).encode("utf-8")) if embedding else None,
+                        Json(
+                            {
+                                "active_file": str(getattr(snapshot, "active_file", "") or ""),
+                                "language_id": str(getattr(snapshot, "language_id", "") or ""),
+                                "summary": str(metadata.get("summary") or ""),
+                            }
+                        ),
+                        "SYNCED",
+                        getattr(snapshot, "timestamp", None),
+                        getattr(snapshot, "timestamp", None),
+                    ),
+                )
+            return True
+        except Exception as exc:
+            logger.error("PostgreSQL snapshot upsert failed for snapshot=%s: %s", getattr(snapshot, "id", "unknown"), exc)
+            return False
 
     def _collection_user_key(self, user_id: str | None) -> str:
         return user_id or "__default__"
@@ -55,9 +179,58 @@ class VectorDBService:
         return "backfill request to compactor" in text or "metadata segment" in text
 
     def _activate_collection_failover(self, user_id: str | None, reason: Exception) -> None:
+        """
+        Activate failover collection and migrate data from old collection if possible.
+        This prevents data loss when Chroma compactor fails.
+        """
         user_key = self._collection_user_key(user_id)
         base_name = self._base_collection_name(user_id)
         failover_name = self._safe_collection_name(f"{base_name}-recovery-{int(time.time())}")
+        
+        # Try to migrate data from old collection to failover collection
+        try:
+            old_collection_name = self._collection_aliases.get(user_key) or base_name
+            old_collection_name = self._safe_collection_name(old_collection_name)
+            
+            # Don't attempt migration if we're already in a recovery collection
+            if "recovery" not in old_collection_name.lower():
+                old_coll = self.chroma_client.get_or_create_collection(name=old_collection_name)
+                failover_coll = self.chroma_client.get_or_create_collection(name=failover_name)
+                
+                # Get all data from old collection
+                try:
+                    old_count = old_coll.count() or 0
+                    if old_count > 0:
+                        results = old_coll.get(limit=100000, include=["embeddings", "metadatas", "documents"])
+                        ids = results.get("ids") or []
+                        embeddings = results.get("embeddings") or []
+                        metadatas = results.get("metadatas") or []
+                        documents = results.get("documents") or []
+                        
+                        if ids:
+                            # Migrate to failover collection
+                            failover_coll.upsert(
+                                ids=ids,
+                                embeddings=embeddings if embeddings else None,
+                                metadatas=metadatas,
+                                documents=documents
+                            )
+                            logger.info(
+                                "Migrated %d snapshot records from '%s' to failover collection '%s'",
+                                len(ids),
+                                old_collection_name,
+                                failover_name,
+                            )
+                except Exception as migration_exc:
+                    logger.warning(
+                        "Failed to migrate data from old collection during failover: %s. "
+                        "Failover collection will be empty but future writes will succeed.",
+                        migration_exc,
+                    )
+        except Exception as failover_exc:
+            logger.warning("Error during failover setup: %s", failover_exc)
+        
+        # Update alias to point to new collection
         self._collection_aliases[user_key] = failover_name
         self._clear_user_cache(user_id)
         logger.error(
@@ -159,6 +332,86 @@ class VectorDBService:
             logger.error("Failed to get/create collection '%s': %s", collection_name, exc)
             return None
 
+    async def _try_recovery_collections(
+        self,
+        user_id: str,
+        limit: int = 200,
+        project_id: str | None = None,
+    ) -> list[dict]:
+        """Scan for recovery collections and try to fetch data from them."""
+        if not self.chroma_client:
+            return []
+        
+        try:
+            base_name = self._base_collection_name(user_id)
+            recovery_prefix = f"{base_name}-recovery-"
+            
+            # List all collections and find recovery collections for this user
+            all_collections = self.chroma_client.list_collections()
+            recovery_collections = [
+                c for c in all_collections 
+                if recovery_prefix in c.name
+            ]
+            
+            if not recovery_collections:
+                logger.debug("No recovery collections found for user=%s", user_id)
+                return []
+            
+            # Sort by creation time (embedded in name) - try newest first
+            recovery_collections.sort(key=lambda c: c.name, reverse=True)
+            
+            logger.info("Found %d recovery collections for user=%s, attempting recovery...", 
+                       len(recovery_collections), user_id)
+            
+            # Try each recovery collection
+            for recovery_coll in recovery_collections:
+                try:
+                    count = recovery_coll.count() or 0
+                    if count == 0:
+                        continue
+                    
+                    fetch_limit = min(count, max(limit * 3, 500))
+                    get_kwargs = {
+                        "limit": fetch_limit,
+                        "include": ["metadatas"],
+                    }
+                    if project_id:
+                        get_kwargs["where"] = {"project_id": str(project_id)}
+                    
+                    results = recovery_coll.get(**get_kwargs)
+                    if not results or not results.get("metadatas"):
+                        continue
+                    
+                    metadatas = [dict(meta) for meta in results["metadatas"] if meta]
+                    metadatas.sort(key=lambda meta: self._timestamp_sort_key(meta.get("timestamp")), reverse=True)
+                    output = metadatas[:limit]
+                    
+                    logger.info(
+                        "Successfully recovered %d snapshots from recovery collection '%s' for user=%s",
+                        len(output),
+                        recovery_coll.name,
+                        user_id,
+                    )
+                    
+                    # Update alias to use this recovery collection for future queries
+                    user_key = self._collection_user_key(user_id)
+                    self._collection_aliases[user_key] = recovery_coll.name
+                    
+                    return output
+                except Exception as recovery_exc:
+                    logger.debug(
+                        "Recovery collection '%s' query failed: %s", 
+                        recovery_coll.name, 
+                        recovery_exc
+                    )
+                    continue
+            
+            logger.warning("All recovery collections for user=%s were empty or inaccessible", user_id)
+            return []
+        except Exception as exc:
+            logger.debug("Recovery collection scan failed: %s", exc)
+            return []
+
     def _infer_collection_dimension(self, collection, default_dim: int = 1536) -> int:
         """Infer vector dimension from existing records, or fall back to a default."""
         try:
@@ -199,76 +452,117 @@ class VectorDBService:
     # ── Vector DB Operations ────────────────────────────────────
 
     async def upsert_snapshot(self, snapshot: Any, user_id: str | None = None) -> None:
-        """Store a snapshot document (with embedding) in ChromaDB, scoped to the user."""
+        """Store snapshot in ChromaDB and mirror to PostgreSQL/Azure Search when configured."""
         collection = self._get_collection(user_id)
         if collection is None:
-            logger.warning("Chroma collection not available — skipping upsert.")
-            return
+            logger.warning("Chroma collection not available — continuing with other storage backends.")
 
-        try:
-            # ChromaDB metadatas support str, int, bool, float
-            metadata = {
-                "id": str(snapshot.id),
-                "timestamp": snapshot.timestamp.isoformat() if hasattr(snapshot.timestamp, 'isoformat') else str(snapshot.timestamp),
-                "workspace_folder": str(snapshot.workspace_folder or ""),
-                "active_file": str(snapshot.active_file or ""),
-                "language_id": str(snapshot.language_id or ""),
-                "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
-                "git_branch": str(snapshot.git_branch or ""),
-                "project_id": str(snapshot.project_id or ""),
-                "terminal_commands": json.dumps(snapshot.terminal_commands or []),
-                "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
-                "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
-                "active_symbol": str((snapshot.function_context or {}).get("activeSymbol") or ""),
-                "function_signatures": json.dumps((snapshot.function_context or {}).get("signatures") or []),
-            }
+        metadata = {
+            "id": str(snapshot.id),
+            "timestamp": snapshot.timestamp.isoformat() if hasattr(snapshot.timestamp, "isoformat") else str(snapshot.timestamp),
+            "workspace_folder": str(snapshot.workspace_folder or ""),
+            "active_file": str(snapshot.active_file or ""),
+            "language_id": str(snapshot.language_id or ""),
+            "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
+            "git_branch": str(snapshot.git_branch or ""),
+            "project_id": str(snapshot.project_id or ""),
+            "terminal_commands": json.dumps(snapshot.terminal_commands or []),
+            "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
+            "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
+            "active_symbol": str((snapshot.function_context or {}).get("activeSymbol") or ""),
+            "function_signatures": json.dumps((snapshot.function_context or {}).get("signatures") or []),
+        }
 
-            embedding = snapshot.embedding or []
-            if not embedding:
-                dimension = self._infer_collection_dimension(collection)
-                embedding_source = (
-                    f"{metadata.get('active_file', '')}\n"
-                    f"{metadata.get('summary', '')}\n"
-                    f"{metadata.get('shadow_graph', '')}\n"
-                    f"{metadata.get('active_symbol', '')}\n"
-                    f"{metadata.get('function_signatures', '')}"
-                )
-                embedding = self._build_fallback_embedding(embedding_source, dimension)
-                logger.warning(
-                    "Snapshot %s missing external embedding; using deterministic fallback vector (dim=%d).",
+        embedding = snapshot.embedding or []
+        if not embedding:
+            dimension = self._infer_collection_dimension(collection) if collection is not None else 1536
+            embedding_source = (
+                f"{metadata.get('active_file', '')}\n"
+                f"{metadata.get('summary', '')}\n"
+                f"{metadata.get('shadow_graph', '')}\n"
+                f"{metadata.get('active_symbol', '')}\n"
+                f"{metadata.get('function_signatures', '')}"
+            )
+            embedding = self._build_fallback_embedding(embedding_source, dimension)
+            logger.warning(
+                "Snapshot %s missing external embedding; using deterministic fallback vector (dim=%d).",
+                snapshot.id,
+                len(embedding),
+            )
+        else:
+            # Validate embedding dimension
+            valid_dimensions = [1536, 384]  # ada-002 is 1536, text-embedding-3-small is 384
+            if len(embedding) not in valid_dimensions:
+                logger.error(
+                    "Snapshot %s has invalid embedding dimension %d (expected one of %s). "
+                    "This may cause Azure Search indexing to fail.",
                     snapshot.id,
                     len(embedding),
+                    valid_dimensions,
                 )
 
-            collection.upsert(
-                ids=[str(snapshot.id)],
-                embeddings=[embedding],
-                metadatas=[metadata],
-                documents=[str(snapshot.shadow_graph or "")]
-            )
-            self._clear_user_cache(user_id)
-            logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
-        except Exception as exc:
-            if self._with_compactor_recovery(user_id, exc):
-                collection = self._get_collection(user_id)
-                if collection is not None:
-                    try:
-                        collection.upsert(
-                            ids=[str(snapshot.id)],
-                            embeddings=[embedding],
-                            metadatas=[metadata],
-                            documents=[str(snapshot.shadow_graph or "")],
-                        )
-                        self._clear_user_cache(user_id)
-                        logger.info(
-                            "Upserted snapshot %s to failover collection for user=%s.",
-                            snapshot.id,
-                            user_id or "default",
-                        )
-                        return
-                    except Exception as retry_exc:
-                        logger.error("Retry upsert to failover collection failed: %s", retry_exc)
-            logger.error("Upsert to ChromaDB failed: %s", exc)
+        if collection is not None:
+            try:
+                collection.upsert(
+                    ids=[str(snapshot.id)],
+                    embeddings=[embedding],
+                    metadatas=[metadata],
+                    documents=[str(snapshot.shadow_graph or "")],
+                )
+                logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
+            except Exception as exc:
+                if self._with_compactor_recovery(user_id, exc):
+                    collection = self._get_collection(user_id)
+                    if collection is not None:
+                        try:
+                            collection.upsert(
+                                ids=[str(snapshot.id)],
+                                embeddings=[embedding],
+                                metadatas=[metadata],
+                                documents=[str(snapshot.shadow_graph or "")],
+                            )
+                            logger.info(
+                                "Upserted snapshot %s to failover collection for user=%s.",
+                                snapshot.id,
+                                user_id or "default",
+                            )
+                        except Exception as retry_exc:
+                            logger.error("Retry upsert to failover collection failed: %s", retry_exc)
+                else:
+                    logger.error("Upsert to ChromaDB failed: %s", exc)
+
+        await self._store_snapshot_postgres(snapshot, user_id, metadata, embedding)
+
+        if self.azure_search is not None and user_id:
+            try:
+                indexing_success = await self.azure_search.index_snapshot(
+                    {
+                        "id": str(snapshot.id),
+                        "summary": metadata.get("summary", ""),
+                        "active_file": metadata.get("active_file", ""),
+                        "git_branch": metadata.get("git_branch", ""),
+                        "project_id": metadata.get("project_id", ""),
+                        "user_id": str(user_id),
+                        "timestamp": metadata.get("timestamp", ""),
+                        "entities": metadata.get("entities", ""),
+                        "embedding": embedding,
+                    }
+                )
+                if indexing_success:
+                    logger.info("Snapshot %s successfully synced to Azure Search", snapshot.id)
+                else:
+                    logger.warning(
+                        "Snapshot %s failed to sync to Azure Search after retries; ChromaDB has the data",
+                        snapshot.id
+                    )
+            except Exception as azure_exc:
+                logger.error(
+                    "Unexpected error syncing snapshot %s to Azure Search: %s. Data available in ChromaDB fallback.",
+                    snapshot.id,
+                    azure_exc,
+                )
+
+        self._clear_user_cache(user_id)
 
     async def semantic_search(
         self,
@@ -277,15 +571,17 @@ class VectorDBService:
         user_id: str | None = None,
         project_id: str | None = None,
     ) -> list[dict]:
-        """Perform a vector semantic search over stored snapshots, scoped to the user."""
-        collection = self._get_collection(user_id)
-        if collection is None:
-            logger.warning("Chroma collection not available — returning empty results.")
-            return []
-
+        """Perform a vector semantic search over stored snapshots, scoped to the user.
+        
+        Search strategy:
+        1. Try Azure AI Search (primary) with retry logic
+        2. Fall back to ChromaDB (local vector DB)
+        3. Fall back to recent snapshots if embedding fails
+        """
         cache_key = self._cache_key("semantic", user_id, project_id, query, top_k)
         cached = self._cache_get(cache_key)
         if cached is not None:
+            logger.debug("Cache hit for semantic_search: user=%s, query=%s", user_id, query[:50])
             return cached
 
         try:
@@ -294,7 +590,44 @@ class VectorDBService:
 
             if not query_embedding:
                 logger.warning("No query embedding generated; falling back to recent snapshots.")
-                return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+                fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+                self._cache_set(cache_key, fallback)
+                return fallback
+
+            # Strategy 1: Try Azure AI Search (primary)
+            if self.azure_search is not None and user_id:
+                try:
+                    logger.debug("Attempting Azure AI Search for user=%s", user_id)
+                    azure_results = await self.azure_search.vector_search(
+                        query_vector=query_embedding,
+                        user_id=str(user_id),
+                        project_id=project_id,
+                        k=top_k,
+                    )
+                    if azure_results:
+                        logger.info(
+                            "Azure AI Search returned %d results for user=%s",
+                            len(azure_results),
+                            user_id,
+                        )
+                        self._cache_set(cache_key, azure_results)
+                        return azure_results
+                    else:
+                        logger.debug("Azure AI Search returned empty results, falling back to ChromaDB")
+                except Exception as azure_exc:
+                    logger.warning(
+                        "Azure AI Search failed: %s. Falling back to ChromaDB for user=%s",
+                        azure_exc,
+                        user_id,
+                    )
+
+            # Strategy 2: Fall back to ChromaDB
+            collection = self._get_collection(user_id)
+            if collection is None:
+                logger.warning("Chroma collection not available for user=%s — returning recent snapshots fallback.", user_id)
+                fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
+                self._cache_set(cache_key, fallback)
+                return fallback
 
             query_kwargs: dict[str, Any] = {
                 "query_embeddings": [query_embedding],
@@ -303,6 +636,7 @@ class VectorDBService:
             if project_id:
                 query_kwargs["where"] = {"project_id": str(project_id)}
 
+            logger.debug("Querying ChromaDB for user=%s with %d results requested", user_id, top_k)
             results = collection.query(**query_kwargs)
 
             # ChromaDB returns a dict of lists of lists. We only queried 1 embedding, so index 0
@@ -310,17 +644,21 @@ class VectorDBService:
                 metadatas_list = results["metadatas"][0]
                 if metadatas_list is not None:
                     items = [dict(meta) for meta in metadatas_list]
+                    logger.info("ChromaDB returned %d results for user=%s", len(items), user_id)
                     self._cache_set(cache_key, items)
                     return items
 
+            # Strategy 3: Fall back to recent snapshots
+            logger.debug("ChromaDB returned no results, falling back to recent snapshots for user=%s", user_id)
             fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
             self._cache_set(cache_key, fallback)
             return fallback
 
         except Exception as exc:
             if self._with_compactor_recovery(user_id, exc):
+                logger.info("Activated ChromaDB compactor recovery for user=%s", user_id)
                 return await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
-            logger.error("Semantic search failed: %s", exc)
+            logger.error("Semantic search failed for user=%s: %s", user_id, exc)
             fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
             self._cache_set(cache_key, fallback)
             return fallback
@@ -501,6 +839,42 @@ class VectorDBService:
         project_id: str | None = None,
     ) -> list[dict]:
         """Fetch a chronologically sorted timeline of snapshot metadata (newest first)."""
+        if self._pg_conn is not None and user_id:
+            try:
+                user_uuid = self._to_uuid(user_id)
+                if user_uuid:
+                    with self._pg_conn.cursor() as cur:
+                        query = """
+                            SELECT id, timestamp, active_file, summary, git_branch, project_id
+                            FROM snapshots
+                            WHERE user_id = %s
+                        """
+                        params: list[Any] = [user_uuid]
+                        if project_id:
+                            project_uuid = self._to_uuid(project_id)
+                            if project_uuid:
+                                query += " AND project_id = %s"
+                                params.append(project_uuid)
+                        query += " ORDER BY timestamp DESC LIMIT %s"
+                        params.append(limit)
+
+                        cur.execute(query, params)
+                        rows = cur.fetchall() or []
+                        return [
+                            {
+                                "id": str(row[0]),
+                                "timestamp": row[1].isoformat() if row[1] else None,
+                                "active_file": row[2],
+                                "summary": row[3],
+                                "git_branch": row[4],
+                                "project_id": str(row[5]) if row[5] else None,
+                                "entities": "",
+                            }
+                            for row in rows
+                        ]
+            except Exception as exc:
+                logger.warning("PostgreSQL timeline query failed; falling back to Chroma: %s", exc)
+
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — returning empty timeline.")
@@ -511,38 +885,99 @@ class VectorDBService:
         if cached is not None:
             return cached
 
-        try:
-            total = collection.count() or 0
-            if total == 0:
-                return []
-            
-            # Fetch only what we need + some buffer for sorting
-            fetch_limit = min(total, max(limit * 3, 500))
-            get_kwargs: dict[str, Any] = {
-                "limit": fetch_limit,
-                "include": ["metadatas"],
-            }
-            if project_id:
-                get_kwargs["where"] = {"project_id": str(project_id)}
+        attempted_recovery = False
+        while True:
+            try:
+                total = collection.count() or 0
+                if total == 0:
+                    # If current collection is empty, try recovery collections
+                    if not attempted_recovery and user_id:
+                        results = await self._try_recovery_collections(user_id, limit, project_id)
+                        if results:
+                            self._cache_set(cache_key, results)
+                            return results
+                        attempted_recovery = True
+                    return []
+                
+                # Fetch only what we need + some buffer for sorting
+                fetch_limit = min(total, max(limit * 3, 500))
+                get_kwargs: dict[str, Any] = {
+                    "limit": fetch_limit,
+                    "include": ["metadatas"],
+                }
+                if project_id:
+                    get_kwargs["where"] = {"project_id": str(project_id)}
 
-            results = collection.get(**get_kwargs)
-            if not results or not results.get("metadatas"):
-                return []
+                results = collection.get(**get_kwargs)
+                if not results or not results.get("metadatas"):
+                    if not attempted_recovery and user_id:
+                        # Try recovery collections
+                        recovery_results = await self._try_recovery_collections(user_id, limit, project_id)
+                        if recovery_results:
+                            self._cache_set(cache_key, recovery_results)
+                            return recovery_results
+                        attempted_recovery = True
+                    return []
 
-            metadatas = [dict(meta) for meta in results["metadatas"] if meta]
+                metadatas = [dict(meta) for meta in results["metadatas"] if meta]
 
-            metadatas.sort(key=lambda meta: self._timestamp_sort_key(meta.get("timestamp")), reverse=True)
-            output = metadatas[:limit]
-            self._cache_set(cache_key, output)
-            return output
-        except Exception as exc:
-            if self._with_compactor_recovery(user_id, exc):
+                metadatas.sort(key=lambda meta: self._timestamp_sort_key(meta.get("timestamp")), reverse=True)
+                output = metadatas[:limit]
+                self._cache_set(cache_key, output)
+                return output
+            except Exception as exc:
+                if not attempted_recovery and self._with_compactor_recovery(user_id, exc):
+                    # Recovery activated, retry with new collection
+                    collection = self._get_collection(user_id)
+                    if collection is None:
+                        return []
+                    attempted_recovery = True
+                    continue
+                
+                # If primary recovery didn't help, try recovery collections
+                if user_id and not attempted_recovery:
+                    try:
+                        results = await self._try_recovery_collections(user_id, limit, project_id)
+                        if results:
+                            self._cache_set(cache_key, results)
+                            return results
+                    except Exception as recovery_exc:
+                        logger.debug("Recovery collection scan failed: %s", recovery_exc)
+                
+                logger.error("get_snapshot_timeline failed: %s", exc)
                 return []
-            logger.error("get_snapshot_timeline failed: %s", exc)
-            return []
 
     async def get_snapshot_by_id(self, snapshot_id: str, user_id: str | None = None) -> dict | None:
         """Fetch one snapshot by ID from Chroma metadata/documents."""
+        if self._pg_conn is not None and user_id:
+            try:
+                snapshot_uuid = self._to_uuid(snapshot_id)
+                user_uuid = self._to_uuid(user_id)
+                if snapshot_uuid and user_uuid:
+                    with self._pg_conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT id, timestamp, active_file, git_branch, project_id, summary, shadow_graph
+                            FROM snapshots
+                            WHERE id = %s AND user_id = %s
+                            LIMIT 1
+                            """,
+                            (snapshot_uuid, user_uuid),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            return {
+                                "id": str(row[0]),
+                                "timestamp": row[1].isoformat() if row[1] else None,
+                                "active_file": row[2],
+                                "git_branch": row[3],
+                                "project_id": str(row[4]) if row[4] else None,
+                                "summary": row[5],
+                                "document": row[6] or "",
+                            }
+            except Exception as exc:
+                logger.warning("PostgreSQL snapshot lookup failed; falling back to Chroma: %s", exc)
+
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — snapshot lookup skipped.")
