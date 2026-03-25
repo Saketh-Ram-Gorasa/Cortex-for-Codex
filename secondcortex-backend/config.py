@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     # Local default: ./chroma_db
     chroma_db_path: str = "./chroma_db"
 
+    # PostgreSQL snapshot storage (optional; falls back to Chroma when unset)
+    postgres_connection_string: str = Field("", validation_alias="POSTGRES_CONNECTION_STRING")
+
+    # Azure AI Search (optional; falls back to Chroma semantic search when unset)
+    azure_search_endpoint: str = Field("", validation_alias="AZURE_SEARCH_ENDPOINT")
+    azure_search_api_key: str = Field("", validation_alias="AZURE_SEARCH_API_KEY")
+    azure_search_index_name: str = Field("snapshots", validation_alias="AZURE_SEARCH_INDEX_NAME")
+
     # JWT auth
     jwt_secret: str = Field("", validation_alias="JWT_SECRET")
     pm_guest_enabled: bool = Field(True, validation_alias="PM_GUEST_ENABLED")
