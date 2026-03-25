@@ -145,7 +145,9 @@ export class BackendClient {
                 return false;
             }
             if (!res.ok) {
+                const text = await res.text().catch(() => 'No response body');
                 this.output.appendLine(`[BackendClient] Snapshot upload failed: ${res.status} ${res.statusText}`);
+                this.output.appendLine(`[BackendClient] Snapshot upload details: ${text}`);
                 return false;
             }
             this.output.appendLine('[BackendClient] Snapshot uploaded successfully.');
