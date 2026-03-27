@@ -40,12 +40,55 @@ user_db = UserDB()
 external_ingest = ExternalIngestionService()
 incident_archaeology = IncidentArchaeologyService()
 
+
+def _parse_csv_list(raw: str | None) -> list[str]:
+    value = (raw or "").strip()
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _build_mcp_transport_security() -> TransportSecuritySettings:
+    configured_hosts = _parse_csv_list(getattr(settings, "mcp_allowed_hosts", ""))
+    configured_origins = _parse_csv_list(getattr(settings, "mcp_allowed_origins", ""))
+
+    # On Azure App Service, WEBSITE_HOSTNAME is the public host serving requests.
+    azure_host = (os.getenv("WEBSITE_HOSTNAME", "") or "").strip().lower()
+    allowed_hosts = {host.lower() for host in configured_hosts}
+    if azure_host:
+        allowed_hosts.add(azure_host)
+        configured_origins.append(f"https://{azure_host}")
+
+    deduped_origins: list[str] = []
+    seen_origins = set()
+    for origin in configured_origins:
+        normalized = origin.strip()
+        if not normalized:
+            continue
+        lower = normalized.lower()
+        if lower in seen_origins:
+            continue
+        seen_origins.add(lower)
+        deduped_origins.append(normalized)
+
+    host_list = sorted(allowed_hosts)
+    logger.info(
+        "MCP transport security: dns_rebinding=%s allowed_hosts=%s allowed_origins=%s",
+        bool(settings.mcp_dns_rebinding_protection_enabled),
+        host_list,
+        deduped_origins,
+    )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(settings.mcp_dns_rebinding_protection_enabled),
+        allowed_hosts=host_list,
+        allowed_origins=deduped_origins,
+    )
+
+
 # Create the MCP Server, allowing ANY Production Host (Public)
 mcp = FastMCP(
     "SecondCortex API",
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=bool(settings.mcp_dns_rebinding_protection_enabled)
-    )
+    transport_security=_build_mcp_transport_security(),
 )
 
 
@@ -68,6 +111,7 @@ class _KeyRateLimiter:
 
 _rate_limiter = _KeyRateLimiter(settings.mcp_rate_limit_per_minute)
 _task_summary_cache: dict[tuple[str, str, str, str], dict] = {}
+_search_memory_cache: dict[tuple[str, str, int], dict] = {}
 _METRIC_SAMPLE_SIZE = 500
 _mcp_metrics = {
     "started_at": time.time(),
@@ -80,6 +124,9 @@ _mcp_metrics = {
     "task_cache_hit": 0,
     "task_cache_miss": 0,
     "task_cache_stale_rebuilt": 0,
+    "search_cache_hit": 0,
+    "search_cache_miss": 0,
+    "search_cache_stale_rebuilt": 0,
     "tool_counts": Counter(),
     "tool_latency_ms": defaultdict(lambda: deque(maxlen=_METRIC_SAMPLE_SIZE)),
     "graph_discovered_nodes": deque(maxlen=_METRIC_SAMPLE_SIZE),
@@ -366,6 +413,116 @@ def _trim_to_budget(text: str, max_tokens: int) -> str:
     return text[:allowed] + marker
 
 
+def _apply_response_soft_limit(text: str) -> str:
+    limit = max(1000, int(getattr(settings, "mcp_response_soft_char_limit", 24000)))
+    if len(text) <= limit:
+        return text
+    marker = (
+        "\n\n[Output truncated by MCP response soft limit. "
+        "Use narrower queries, lower top_k, or search_memory_batch for structured splitting.]"
+    )
+    allowed = max(0, limit - len(marker))
+    return text[:allowed] + marker
+
+
+def _normalize_batch_queries(queries: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for query in (queries or []):
+        cleaned = str(query or "").strip()
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
+async def _render_search_memory_response(
+    *,
+    user_id: str,
+    normalized_query: str,
+    safe_top_k: int,
+) -> str:
+    # Dual retrieval: facts (long-term) + snapshots (short-term)
+    facts: list[dict] = []
+    if hasattr(vector_db, "recall_facts"):
+        try:
+            facts = await vector_db.recall_facts(
+                normalized_query,
+                top_k=safe_top_k,
+                user_id=user_id,
+                min_salience=0.3,
+            )
+        except Exception:
+            facts = []
+
+    snapshots = await vector_db.semantic_search(normalized_query, top_k=safe_top_k, user_id=user_id)
+
+    output_parts = []
+
+    # Format facts section (long-term memory)
+    if facts:
+        output_parts.append(
+            f"=== FACTS (LONG-TERM MEMORY) ===\nFound {len(facts)} relevant facts for '{normalized_query}':\n"
+        )
+        for i, fact in enumerate(facts):
+            kind = fact.get("kind", "unknown")
+            content = fact.get("document", "No content")
+            salience = fact.get("salience", 0.5)
+            confidence = fact.get("confidence", 0.7)
+            entities = fact.get("entities", [])
+            source_snapshot = fact.get("source_snapshot_id", "Unknown")
+
+            chunk = (
+                f"--- Fact {i+1} ({kind}) ---\n"
+                f"Content: {content}\n"
+                f"Salience: {salience:.1%} | Confidence: {confidence:.1%}\n"
+                f"Entities: {', '.join(entities) if entities else 'None'}\n"
+                f"Source: Snapshot {source_snapshot[:8] if source_snapshot else 'Unknown'}\n"
+            )
+            output_parts.append(chunk)
+    else:
+        output_parts.append(f"No relevant facts found for '{normalized_query}'.\n")
+
+    output_parts.append("\n=== SNAPSHOTS (SHORT-TERM MEMORY) ===\n")
+
+    # Format snapshots section (short-term memory)
+    if snapshots:
+        output_parts.append(f"Found {len(snapshots)} relevant snapshots for '{normalized_query}':\n")
+        for i, meta in enumerate(snapshots):
+            timestamp = meta.get("timestamp", "Unknown Time")
+            file_path = meta.get("active_file", "Unknown File")
+            branch = meta.get("git_branch", "Unknown Branch")
+            summary = meta.get("summary", "No summary")
+
+            chunk = (
+                f"--- Snapshot {i+1} ---\n"
+                f"Time: {timestamp}\n"
+                f"File: {file_path}\n"
+                f"Branch: {branch}\n"
+                f"Summary: {summary}\n"
+                f"Entities: {meta.get('entities', 'None')}\n"
+            )
+            source_type = str(meta.get("source_type") or "").strip()
+            source_uri = str(meta.get("source_uri") or "").strip()
+            confidence = meta.get("confidence_score")
+            if source_type:
+                chunk += f"Source: {source_type}\n"
+            if source_uri:
+                chunk += f"Source URI: {source_uri}\n"
+            if confidence not in (None, ""):
+                chunk += f"Confidence: {confidence}\n"
+
+            # Include shadow graph (code context) if available
+            code_context = meta.get("shadow_graph")
+            if code_context:
+                code_snippet = code_context[:1000] + ("..." if len(code_context) > 1000 else "")
+                chunk += f"Code Context:\n```\n{code_snippet}\n```\n"
+
+            output_parts.append(chunk)
+    else:
+        output_parts.append(f"No relevant snapshots found for '{normalized_query}'.\n")
+
+    return _apply_response_soft_limit("\n".join(output_parts))
+
+
 def _summarize_task_context(domain: str, task_type: str, snapshots: list[dict]) -> str:
     if not snapshots:
         return f"No context found for domain '{domain}' and task '{task_type}'."
@@ -437,77 +594,85 @@ async def search_memory(query: str, api_key: str | None = None, top_k: int | Non
 
     logger.info("MCP search_memory called query_len=%d top_k=%d", len(normalized_query), safe_top_k)
 
-    user_id = user["id"]
+    user_id = str(user["id"])
     logger.info(f"MCP Authenticated for user: {user.get('display_name', user_id)}")
-    
-    # Dual retrieval: facts (long-term) + snapshots (short-term)
-    facts = await vector_db.recall_facts(normalized_query, top_k=safe_top_k, user_id=user_id, min_salience=0.3)
-    snapshots = await vector_db.semantic_search(normalized_query, top_k=safe_top_k, user_id=user_id)
-    
-    output_parts = []
-    
-    # Format facts section (long-term memory)
-    if facts:
-        output_parts.append(f"=== FACTS (LONG-TERM MEMORY) ===\nFound {len(facts)} relevant facts for '{normalized_query}':\n")
-        for i, fact in enumerate(facts):
-            kind = fact.get("kind", "unknown")
-            content = fact.get("document", "No content")
-            salience = fact.get("salience", 0.5)
-            confidence = fact.get("confidence", 0.7)
-            entities = fact.get("entities", [])
-            source_snapshot = fact.get("source_snapshot_id", "Unknown")
-            
-            chunk = (
-                f"--- Fact {i+1} ({kind}) ---\n"
-                f"Content: {content}\n"
-                f"Salience: {salience:.1%} | Confidence: {confidence:.1%}\n"
-                f"Entities: {', '.join(entities) if entities else 'None'}\n"
-                f"Source: Snapshot {source_snapshot[:8] if source_snapshot else 'Unknown'}\n"
+
+    cache_enabled = bool(settings.mcp_search_memory_cache_enabled)
+    ttl_seconds = max(30, int(settings.mcp_search_memory_ttl_seconds))
+    cache_key = (user_id, normalized_query.lower(), safe_top_k)
+    now = time.time()
+    cached = _search_memory_cache.get(cache_key) if cache_enabled else None
+    if cached:
+        if now < float(cached.get("expires_at", 0)):
+            _mcp_metrics["search_cache_hit"] += 1
+            payload = str(cached.get("content") or "")
+            return _apply_response_soft_limit(
+                payload
+                + f"\n\nFreshness: cache_status=HIT, generated_at={cached.get('generated_at', 'unknown')}, ttl_seconds={ttl_seconds}"
             )
-            output_parts.append(chunk)
+        _mcp_metrics["search_cache_stale_rebuilt"] += 1
     else:
-        output_parts.append(f"No relevant facts found for '{normalized_query}'.\n")
-    
-    output_parts.append("\n=== SNAPSHOTS (SHORT-TERM MEMORY) ===\n")
-    
-    # Format snapshots section (short-term memory)
-    if snapshots:
-        output_parts.append(f"Found {len(snapshots)} relevant snapshots for '{normalized_query}':\n")
-        for i, meta in enumerate(snapshots):
-            timestamp = meta.get("timestamp", "Unknown Time")
-            file_path = meta.get("active_file", "Unknown File")
-            branch = meta.get("git_branch", "Unknown Branch")
-            summary = meta.get("summary", "No summary")
-            
-            chunk = (
-                f"--- Snapshot {i+1} ---\n"
-                f"Time: {timestamp}\n"
-                f"File: {file_path}\n"
-                f"Branch: {branch}\n"
-                f"Summary: {summary}\n"
-                f"Entities: {meta.get('entities', 'None')}\n"
-            )
-            source_type = str(meta.get("source_type") or "").strip()
-            source_uri = str(meta.get("source_uri") or "").strip()
-            confidence = meta.get("confidence_score")
-            if source_type:
-                chunk += f"Source: {source_type}\n"
-            if source_uri:
-                chunk += f"Source URI: {source_uri}\n"
-            if confidence not in (None, ""):
-                chunk += f"Confidence: {confidence}\n"
-            
-            # Include shadow graph (code context) if available
-            code_context = meta.get("shadow_graph")
-            if code_context:
-                code_snippet = code_context[:1000] + ("..." if len(code_context) > 1000 else "")
-                chunk += f"Code Context:\n```\n{code_snippet}\n```\n"
-                
-            output_parts.append(chunk)
-    else:
-        output_parts.append(f"No relevant snapshots found for '{normalized_query}'.\n")
-            
-    return "\n".join(output_parts)
+        _mcp_metrics["search_cache_miss"] += 1
+
+    response = await _render_search_memory_response(
+        user_id=user_id,
+        normalized_query=normalized_query,
+        safe_top_k=safe_top_k,
+    )
+
+    if cache_enabled:
+        _search_memory_cache[cache_key] = {
+            "content": response,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": now + ttl_seconds,
+        }
+
+    return response
+
+
+@mcp.tool()
+@_track_mcp_tool("search_memory_batch")
+async def search_memory_batch(
+    queries: list[str],
+    api_key: str | None = None,
+    top_k: int | None = None,
+) -> str:
+    """
+    Batch search_memory for multiple queries in a single MCP round-trip.
+
+    Returns one section per query so agents can avoid repeated single-query calls.
+    """
+    normalized_queries = _normalize_batch_queries(queries)
+    if not normalized_queries:
+        return "Invalid request: queries must contain at least one non-empty item."
+
+    max_queries = max(1, int(settings.mcp_search_memory_batch_max_queries))
+    if len(normalized_queries) > max_queries:
+        normalized_queries = normalized_queries[:max_queries]
+
+    user, _normalized_query, safe_top_k, error = _authenticate_request(
+        api_key=api_key,
+        query="batch-search",
+        top_k=top_k,
+    )
+    if error:
+        return error
+
+    user_id = str(user["id"])
+    lines: list[str] = [
+        f"Batch search results ({len(normalized_queries)} queries, top_k={safe_top_k}):",
+    ]
+
+    for idx, batch_query in enumerate(normalized_queries, 1):
+        payload = await _render_search_memory_response(
+            user_id=user_id,
+            normalized_query=batch_query,
+            safe_top_k=safe_top_k,
+        )
+        lines.append(f"\n=== Query {idx}: {batch_query} ===\n")
+        lines.append(payload)
+
+    return _apply_response_soft_limit("\n".join(lines))
 
 
 @mcp.tool()
@@ -1133,6 +1298,7 @@ async def get_mcp_metrics(api_key: str | None = None) -> str:
             f"- Rate limited: {int(_mcp_metrics['rate_limited'])}",
             f"- Oversized rejected: {int(_mcp_metrics['oversized_rejections'])}",
             f"- Task summary cache hit/miss/stale: {int(_mcp_metrics['task_cache_hit'])}/{int(_mcp_metrics['task_cache_miss'])}/{int(_mcp_metrics['task_cache_stale_rebuilt'])}",
+            f"- Search memory cache hit/miss/stale: {int(_mcp_metrics['search_cache_hit'])}/{int(_mcp_metrics['search_cache_miss'])}/{int(_mcp_metrics['search_cache_stale_rebuilt'])}",
             f"- Graph discovered nodes avg: {avg_graph_nodes:.2f}",
             "Per-tool metrics:",
             *(per_tool_lines or ["- No tool calls recorded yet."]),
