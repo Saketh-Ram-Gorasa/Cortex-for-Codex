@@ -51,6 +51,17 @@ def _hash_api_secret(secret: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}:{secret}".encode("utf-8")).hexdigest()
 
 
+def _extract_mcp_key_id(api_key: str | None) -> str | None:
+    raw = str(api_key or "").strip()
+    if not raw.startswith("sc_mcp_"):
+        return None
+    parts = raw.split("_", 3)
+    if len(parts) != 4:
+        return None
+    key_id = parts[2].strip()
+    return key_id or None
+
+
 class UserDB:
     """Manages user accounts in SQLite."""
 
@@ -584,6 +595,34 @@ class UserDB:
             for row in rows
         ]
 
+    def get_latest_active_mcp_key_metadata(self, user_id: str) -> dict | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT key_id, name, scopes, created_at, expires_at, last_used_at
+                FROM mcp_api_keys
+                WHERE user_id = ?
+                  AND is_revoked = 0
+                  AND (expires_at IS NULL OR expires_at > ?)
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, datetime.now(timezone.utc).isoformat()),
+            ).fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "key_id": row[0],
+            "name": row[1],
+            "scopes": [s for s in str(row[2] or "").split(",") if s],
+            "created_at": row[3],
+            "expires_at": row[4],
+            "last_used_at": row[5],
+            "is_revoked": False,
+        }
+
     def revoke_mcp_api_key(self, user_id: str, key_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
@@ -600,6 +639,73 @@ class UserDB:
             )
             conn.commit()
             return int(cursor.rowcount or 0) > 0
+
+    def rotate_mcp_api_key(
+        self,
+        user_id: str,
+        *,
+        key_id: str,
+        ttl_days: int | None = None,
+    ) -> dict | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT name, scopes, is_revoked
+                FROM mcp_api_keys
+                WHERE user_id = ? AND key_id = ?
+                """,
+                (user_id, key_id),
+            ).fetchone()
+
+        if not row:
+            return None
+
+        name, scopes_raw, is_revoked = row
+        if int(is_revoked or 0) == 1:
+            return None
+
+        scopes = [s for s in str(scopes_raw or "").split(",") if s]
+        issued = self.issue_mcp_api_key(
+            user_id=user_id,
+            name=str(name or "default"),
+            scopes=scopes or ["memory:read"],
+            ttl_days=ttl_days,
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE mcp_api_keys SET is_revoked = 1 WHERE user_id = ? AND key_id = ?",
+                (user_id, key_id),
+            )
+            conn.commit()
+
+        issued["rotated_from"] = key_id
+        return issued
+
+    def rotate_current_mcp_api_key(self, user_id: str, ttl_days: int | None = None) -> dict:
+        current_key = self.get_mcp_api_key(user_id)
+        current_key_id = _extract_mcp_key_id(current_key)
+
+        if current_key_id:
+            rotated = self.rotate_mcp_api_key(
+                user_id=user_id,
+                key_id=current_key_id,
+                ttl_days=ttl_days,
+            )
+            if rotated:
+                return rotated
+
+        latest = self.get_latest_active_mcp_key_metadata(user_id)
+        if latest and latest.get("key_id"):
+            rotated = self.rotate_mcp_api_key(
+                user_id=user_id,
+                key_id=str(latest["key_id"]),
+                ttl_days=ttl_days,
+            )
+            if rotated:
+                return rotated
+
+        return self.issue_mcp_api_key(user_id=user_id, ttl_days=ttl_days)
 
     def _lookup_new_style_mcp_key(self, api_key: str) -> dict | None:
         if not api_key or not api_key.startswith("sc_mcp_"):
@@ -684,6 +790,13 @@ class UserDB:
         if row:
             return row[0]
         return None
+
+    def get_current_mcp_key_metadata(self, user_id: str) -> dict:
+        api_key = self.get_mcp_api_key(user_id)
+        return {
+            "api_key": api_key,
+            "key_id": _extract_mcp_key_id(api_key),
+        }
 
     def create_team(self, team_id: str, name: str, team_lead_id: str) -> dict:
         """Create a new team. Verify team_lead_id exists as a user first."""

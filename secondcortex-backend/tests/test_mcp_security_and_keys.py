@@ -80,6 +80,43 @@ def test_mcp_keys_routes_issue_list_revoke():
     assert revoke.json()["status"] == "revoked"
 
 
+def test_mcp_key_rotate_endpoint_revokes_previous_key():
+    from main import app
+
+    client = TestClient(app)
+
+    email = f"rotate-{uuid.uuid4().hex[:8]}@example.com"
+    signup = client.post(
+        "/api/v1/auth/signup",
+        json={"email": email, "password": "test123", "display_name": "Rotate User"},
+    )
+    assert signup.status_code == 200
+    token = signup.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    issue = client.post(
+        "/api/v1/auth/mcp-keys",
+        headers=headers,
+        json={"name": "cursor", "scopes": ["memory:read"], "ttl_days": 30},
+    )
+    assert issue.status_code == 200
+    first = issue.json()
+
+    rotate = client.post("/api/v1/auth/mcp-key/rotate", headers=headers, json={})
+    assert rotate.status_code == 200
+    rotated = rotate.json()
+    assert rotated["api_key"].startswith("sc_mcp_")
+    assert rotated["key_id"] != first["key_id"]
+
+    listing = client.get("/api/v1/auth/mcp-keys", headers=headers)
+    assert listing.status_code == 200
+    keys = listing.json()["keys"]
+    first_meta = next((key for key in keys if key["key_id"] == first["key_id"]), None)
+    rotated_meta = next((key for key in keys if key["key_id"] == rotated["key_id"]), None)
+    assert first_meta is not None and first_meta["is_revoked"] is True
+    assert rotated_meta is not None and rotated_meta["is_revoked"] is False
+
+
 def test_hierarchical_mcp_tools_return_context(monkeypatch):
     class _FakeUserDB:
         def get_user_by_mcp_api_key(self, api_key: str):
@@ -554,6 +591,9 @@ def test_get_mcp_metrics_reports_latency_and_counters(monkeypatch):
     mcp_server._mcp_metrics["task_cache_hit"] = 0
     mcp_server._mcp_metrics["task_cache_miss"] = 0
     mcp_server._mcp_metrics["task_cache_stale_rebuilt"] = 0
+    mcp_server._mcp_metrics["search_cache_hit"] = 0
+    mcp_server._mcp_metrics["search_cache_miss"] = 0
+    mcp_server._mcp_metrics["search_cache_stale_rebuilt"] = 0
     mcp_server._mcp_metrics["tool_counts"].clear()
     mcp_server._mcp_metrics["tool_latency_ms"].clear()
     mcp_server._mcp_metrics["graph_discovered_nodes"].clear()
@@ -588,3 +628,100 @@ def test_get_mcp_readiness_reports_degraded_when_vector_unavailable(monkeypatch)
     out = asyncio.run(mcp_server.get_mcp_readiness(api_key=None))
     assert "MCP readiness: DEGRADED" in out
     assert "vector_client: not-ready" in out
+
+
+def test_search_memory_batch_returns_multi_query_sections(monkeypatch):
+    class _FakeUserDB:
+        def get_user_by_mcp_api_key(self, api_key: str):
+            if api_key == "batch-key":
+                return {"id": "u1", "display_name": "Batch User", "scopes": ["memory:read"]}
+            return None
+
+    class _FakeVectorDB:
+        async def semantic_search(
+            self,
+            query: str,
+            top_k: int = 5,
+            user_id: str | None = None,
+            project_id: str | None = None,
+        ):
+            return [
+                {
+                    "timestamp": "2026-03-23T10:00:00+00:00",
+                    "active_file": "auth/service.py",
+                    "git_branch": "feature/auth",
+                    "summary": f"Result for {query}",
+                    "entities": "auth,session",
+                }
+            ]
+
+        async def recall_facts(
+            self,
+            query: str,
+            top_k: int = 5,
+            user_id: str | None = None,
+            min_salience: float = 0.3,
+        ):
+            return []
+
+    monkeypatch.setenv("SECONDCORTEX_MCP_API_KEY", "batch-key")
+    monkeypatch.setattr(mcp_server, "user_db", _FakeUserDB())
+    monkeypatch.setattr(mcp_server, "vector_db", _FakeVectorDB())
+    mcp_server._rate_limiter._calls.clear()
+
+    out = asyncio.run(
+        mcp_server.search_memory_batch(
+            queries=["auth flow", "jwt refresh"],
+            api_key=None,
+            top_k=3,
+        )
+    )
+
+    assert "Batch search results" in out
+    assert "=== Query 1: auth flow ===" in out
+    assert "=== Query 2: jwt refresh ===" in out
+
+
+def test_search_memory_respects_response_soft_limit(monkeypatch):
+    class _FakeUserDB:
+        def get_user_by_mcp_api_key(self, api_key: str):
+            if api_key == "soft-limit-key":
+                return {"id": "u1", "display_name": "Soft Limit User", "scopes": ["memory:read"]}
+            return None
+
+    class _FakeVectorDB:
+        async def semantic_search(
+            self,
+            query: str,
+            top_k: int = 5,
+            user_id: str | None = None,
+            project_id: str | None = None,
+        ):
+            return [
+                {
+                    "timestamp": "2026-03-23T10:00:00+00:00",
+                    "active_file": "large-output.py",
+                    "git_branch": "feature/large-output",
+                    "summary": "A" * 5000,
+                    "entities": "large-output",
+                    "shadow_graph": "B" * 5000,
+                }
+            ]
+
+        async def recall_facts(
+            self,
+            query: str,
+            top_k: int = 5,
+            user_id: str | None = None,
+            min_salience: float = 0.3,
+        ):
+            return []
+
+    monkeypatch.setenv("SECONDCORTEX_MCP_API_KEY", "soft-limit-key")
+    monkeypatch.setattr(mcp_server, "user_db", _FakeUserDB())
+    monkeypatch.setattr(mcp_server, "vector_db", _FakeVectorDB())
+    monkeypatch.setattr(mcp_server.settings, "mcp_response_soft_char_limit", 1200)
+    mcp_server._rate_limiter._calls.clear()
+
+    out = asyncio.run(mcp_server.search_memory(query="oversized context", api_key=None, top_k=3))
+    assert "Output truncated by MCP response soft limit" in out

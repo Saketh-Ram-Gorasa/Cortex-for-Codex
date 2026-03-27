@@ -38,6 +38,7 @@ export default function AuthGate() {
   const [projectRefreshKey, setProjectRefreshKey] = useState(0);
 
   const [mcpKey, setMcpKey] = useState<string | null>(null);
+  const [mcpKeyId, setMcpKeyId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showMcpModal, setShowMcpModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +111,7 @@ export default function AuthGate() {
         const data = await res.json();
         if (data.api_key) {
           setMcpKey(data.api_key);
+          setMcpKeyId(typeof data.key_id === 'string' ? data.key_id : null);
         }
       }
     } catch (err) {
@@ -132,6 +134,7 @@ export default function AuthGate() {
       if (res.ok) {
         const data = await res.json();
         setMcpKey(data.api_key);
+        setMcpKeyId(typeof data.key_id === 'string' ? data.key_id : null);
         setShowMcpModal(true);
       } else {
         setError('Failed to generate key. Please try again.');
@@ -147,6 +150,44 @@ export default function AuthGate() {
     if (mcpKey) {
       navigator.clipboard.writeText(mcpKey);
       setNotice('API key copied to clipboard.');
+    }
+  };
+
+  const handleRotateKey = async () => {
+    if (!token) {
+      return;
+    }
+
+    const confirmed = window.confirm('Rotate your MCP key now? The old key will stop working immediately.');
+    if (!confirmed) {
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`${backendUrl}/api/v1/auth/mcp-key/rotate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        setError('Failed to rotate key. Please try again.');
+        return;
+      }
+      const data = await res.json();
+      setMcpKey(data.api_key);
+      setMcpKeyId(typeof data.key_id === 'string' ? data.key_id : null);
+      setShowMcpModal(true);
+      setNotice('MCP key rotated. Update all MCP clients with this new key.');
+    } catch {
+      setError('Connection error while rotating key.');
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -758,6 +799,10 @@ export default function AuthGate() {
                 </button>
               </div>
 
+              {mcpKeyId && (
+                <p className="sc-auth-sub">Key ID: {mcpKeyId}</p>
+              )}
+
               <div className="sc-modal-warn">
                 <span>Warning</span>
                 <p>Do not share this key publicly. It grants access to your snapshot history.</p>
@@ -765,6 +810,15 @@ export default function AuthGate() {
 
               {error && <p className="sc-auth-error">{error}</p>}
               {notice && <p className="sc-auth-sub">{notice}</p>}
+
+              <button
+                onClick={handleRotateKey}
+                className="btn-secondary"
+                disabled={isGenerating}
+                type="button"
+              >
+                {isGenerating ? 'Rotating…' : 'Rotate Key'}
+              </button>
 
               <button onClick={() => setShowMcpModal(false)} className="btn-primary sc-modal-close">
                 Got it
