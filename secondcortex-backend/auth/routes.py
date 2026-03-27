@@ -50,11 +50,16 @@ class AuthResponse(BaseModel):
 
 class MCPKeyResponse(BaseModel):
     api_key: str | None
+    key_id: str | None = None
 
 
 class MCPKeyIssueRequest(BaseModel):
     name: str = "default"
     scopes: list[str] = ["memory:read"]
+    ttl_days: int | None = None
+
+
+class MCPKeyRotateRequest(BaseModel):
     ttl_days: int | None = None
 
 
@@ -232,7 +237,18 @@ async def generate_mcp_key(
         scopes=payload.scopes,
         ttl_days=payload.ttl_days,
     )
-    return MCPKeyResponse(api_key=issued["api_key"])
+    return MCPKeyResponse(api_key=issued["api_key"], key_id=issued.get("key_id"))
+
+
+@router.post("/mcp-key/rotate", response_model=MCPKeyIssueResponse)
+async def rotate_current_mcp_key(
+    req: MCPKeyRotateRequest | None = Body(default=None),
+    user_id: str = Depends(get_current_user),
+):
+    """Rotate the current MCP API key for the logged-in user."""
+    payload = req or MCPKeyRotateRequest()
+    issued = user_db.rotate_current_mcp_api_key(user_id=user_id, ttl_days=payload.ttl_days)
+    return MCPKeyIssueResponse(**issued)
 
 
 @router.post("/mcp-keys", response_model=MCPKeyIssueResponse)
@@ -276,8 +292,8 @@ async def revoke_mcp_key(
 @router.get("/mcp-key", response_model=MCPKeyResponse)
 async def get_mcp_key(user_id: str = Depends(get_current_user)):
     """Get the current user's existing MCP API key."""
-    api_key = user_db.get_mcp_api_key(user_id)
-    return MCPKeyResponse(api_key=api_key)
+    key_meta = user_db.get_current_mcp_key_metadata(user_id)
+    return MCPKeyResponse(api_key=key_meta.get("api_key"), key_id=key_meta.get("key_id"))
 
 
 @router.post("/pm-guest/login", response_model=PMGuestLoginResponse)
