@@ -118,6 +118,8 @@ class Settings(BaseSettings):
         True,
         validation_alias="MCP_DNS_REBINDING_PROTECTION_ENABLED",
     )
+    mcp_allowed_hosts: str = Field("", validation_alias="MCP_ALLOWED_HOSTS")
+    mcp_allowed_origins: str = Field("", validation_alias="MCP_ALLOWED_ORIGINS")
     mcp_legacy_tool_api_key_enabled: bool = Field(True, validation_alias="MCP_LEGACY_TOOL_API_KEY_ENABLED")
     mcp_max_top_k: int = Field(20, validation_alias="MCP_MAX_TOP_K")
     mcp_default_top_k: int = Field(5, validation_alias="MCP_DEFAULT_TOP_K")
@@ -134,6 +136,10 @@ class Settings(BaseSettings):
     mcp_external_slack_enabled: bool = Field(False, validation_alias="MCP_EXTERNAL_SLACK_ENABLED")
     mcp_external_document_enabled: bool = Field(False, validation_alias="MCP_EXTERNAL_DOCUMENT_ENABLED")
     mcp_external_max_messages: int = Field(50, validation_alias="MCP_EXTERNAL_MAX_MESSAGES")
+    mcp_search_memory_cache_enabled: bool = Field(True, validation_alias="MCP_SEARCH_MEMORY_CACHE_ENABLED")
+    mcp_search_memory_ttl_seconds: int = Field(300, validation_alias="MCP_SEARCH_MEMORY_TTL_SECONDS")
+    mcp_search_memory_batch_max_queries: int = Field(8, validation_alias="MCP_SEARCH_MEMORY_BATCH_MAX_QUERIES")
+    mcp_response_soft_char_limit: int = Field(24000, validation_alias="MCP_RESPONSE_SOFT_CHAR_LIMIT")
 
     # Azure AI Document Intelligence (external document ingestion)
     azure_document_intelligence_endpoint: str = Field(
