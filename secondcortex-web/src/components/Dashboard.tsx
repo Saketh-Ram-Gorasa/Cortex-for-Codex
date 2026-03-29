@@ -51,19 +51,34 @@ export default function Dashboard({
 }: DashboardProps) {
     const userId = getUserIdFromToken(token);
     const [statsLoading, setStatsLoading] = useState(true);
+    const [hasLoadedStats, setHasLoadedStats] = useState(false);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
         activeProject: 'No Project Selected'
     });
 
-    const fetchStats = useCallback(async () => {
+    const toTimestampMs = (value: string | null): number | null => {
+        if (!value) {
+            return null;
+        }
+        const n = Number(value);
+        if (!Number.isNaN(n)) {
+            return n > 10_000_000_000 ? n : n * 1000;
+        }
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? null : parsed;
+    };
+
+    const fetchStats = useCallback(async (silent = false) => {
         if (mode === 'pm') {
             setStatsLoading(false);
             return;
         }
 
-        setStatsLoading(true);
+        if (!silent && !hasLoadedStats) {
+            setStatsLoading(true);
+        }
         try {
             const projectQuery = selectedProjectId ? `&projectId=${encodeURIComponent(selectedProjectId)}` : '';
             const res = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=1000${projectQuery}`, {
@@ -87,21 +102,26 @@ export default function Dashboard({
                         activeProject: selectedProjectId ? 'Selected Project' : 'All Projects',
                     }));
                 }
+                setHasLoadedStats(true);
             }
         } catch (err) {
             console.error("Failed to fetch stats", err);
         } finally {
-            setStatsLoading(false);
+            if (!silent) {
+                setStatsLoading(false);
+            }
         }
-    }, [backendUrl, token, selectedProjectId, mode]);
+    }, [backendUrl, token, selectedProjectId, mode, hasLoadedStats]);
 
     useEffect(() => {
         if (mode === 'pm') {
             return;
         }
 
-        fetchStats();
-        const intervalId = window.setInterval(fetchStats, 5000);
+        void fetchStats(false);
+        const intervalId = window.setInterval(() => {
+            void fetchStats(true);
+        }, 5000);
         return () => window.clearInterval(intervalId);
     }, [fetchStats, mode]);
 
@@ -141,7 +161,11 @@ export default function Dashboard({
                         <StatCard 
                             title="Memory Snapshots" 
                             value={stats.totalSnapshots.toString()} 
-                            subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(stats.lastSnapshotTime).toLocaleTimeString()}` : "No snapshots yet"} 
+                            subtitle={
+                                stats.lastSnapshotTime && toTimestampMs(stats.lastSnapshotTime)
+                                    ? `Last update: ${new Date(toTimestampMs(stats.lastSnapshotTime) as number).toLocaleTimeString()}`
+                                    : "No snapshots yet"
+                            }
                             icon="storage"
                         />
                         <StatCard 
