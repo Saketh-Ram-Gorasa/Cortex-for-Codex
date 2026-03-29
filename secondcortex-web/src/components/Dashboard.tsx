@@ -86,23 +86,34 @@ export default function Dashboard({
             });
             if (res.ok) {
                 const data = await res.json();
-                if (data.timeline && data.timeline.length > 0) {
-                    const latest = data.timeline[data.timeline.length - 1];
+                const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+
+                if (timeline.length > 0) {
+                    const latest = timeline[timeline.length - 1];
                     setStats(prev => ({
                         ...prev,
-                        totalSnapshots: data.timeline.length,
+                        totalSnapshots: timeline.length,
                         lastSnapshotTime: latest?.timestamp ?? null,
                         activeProject: selectedProjectId ? 'Selected Project' : 'All Projects',
                     }));
-                } else {
+                } else if (!silent || !hasLoadedStats) {
+                    // On first load we can show true zeros; on background refresh keep last known values.
                     setStats(prev => ({
                         ...prev,
                         totalSnapshots: 0,
                         lastSnapshotTime: null,
                         activeProject: selectedProjectId ? 'Selected Project' : 'All Projects',
                     }));
+                } else {
+                    setStats(prev => ({
+                        ...prev,
+                        activeProject: selectedProjectId ? 'Selected Project' : 'All Projects',
+                    }));
                 }
-                setHasLoadedStats(true);
+
+                if (!hasLoadedStats) {
+                    setHasLoadedStats(true);
+                }
             }
         } catch (err) {
             console.error("Failed to fetch stats", err);
