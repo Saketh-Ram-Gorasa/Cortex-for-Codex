@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { BackendClient } from '../backendClient';
+import { DEMO_MODE, getMockSnapshot } from '../demoMode';
 
 /**
  * WorkspaceResurrector – "The Hands"
@@ -16,6 +18,11 @@ export class WorkspaceResurrector {
     constructor(private output: vscode.OutputChannel) { }
 
     async executeFromQuery(target: string, backend: BackendClient, currentWorkspace?: string): Promise<void> {
+        if (DEMO_MODE) {
+            await this.executeDemoResurrection();
+            return;
+        }
+
         this.output.appendLine(`[Resurrector] Requesting resurrection plan for: ${target}`);
 
         const plan = await backend.getResurrectionPlan(target, currentWorkspace);
@@ -39,6 +46,31 @@ export class WorkspaceResurrector {
         }
 
         await this.execute(plan.commands as ResurrectionCommand[]);
+    }
+
+    private async executeDemoResurrection(): Promise<void> {
+        const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('SecondCortex');
+        terminal.show();
+        await this.logToTerminal(terminal, '> checking git state...');
+        await this.logToTerminal(terminal, '> switching to feat/payment-retry-v2');
+        await this.logToTerminal(terminal, '> opening files...');
+
+        const snapshot = getMockSnapshot();
+
+        for (const fileName of snapshot.open_files) {
+            const opened = await this.openFileByBasename(fileName);
+            await this.logToTerminal(
+                terminal,
+                opened
+                    ? `> opened ${fileName}`
+                    : `> skipped ${fileName} (not found)`
+            );
+        }
+
+        await this.logToTerminal(terminal, '> restoring terminal...');
+        await this.logToTerminal(terminal, '> Workspace restored in 94ms', 0);
+
+        vscode.window.showInformationMessage('SecondCortex: Workspace restoration completed.');
     }
 
     /**
@@ -133,6 +165,7 @@ export class WorkspaceResurrector {
                 ? (viewColumn as vscode.ViewColumn)
                 : vscode.ViewColumn.One,
             preserveFocus: false,
+            preview: false,
         });
     }
 
@@ -151,6 +184,103 @@ export class WorkspaceResurrector {
 
     private sleep(ms: number): Promise<void> {
         return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    private async openDemoFile(relativePath: string): Promise<boolean> {
+        const roots = this.getSearchRoots();
+        for (const root of roots) {
+            const fullPath = path.join(root, relativePath);
+            if (fs.existsSync(fullPath)) {
+                await this.openFile(fullPath, vscode.ViewColumn.One);
+                return true;
+            }
+        }
+        this.output.appendLine(`[Resurrector] Could not locate file: ${relativePath}`);
+        return false;
+    }
+
+    private async openFileByBasename(fileName: string): Promise<boolean> {
+        const workspaceMatch = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 1);
+        if (workspaceMatch.length > 0) {
+            const doc = await vscode.workspace.openTextDocument(workspaceMatch[0]);
+            await vscode.window.showTextDocument(doc, { preserveFocus: false, preview: false });
+            return true;
+        }
+
+        for (const root of this.getSearchRoots()) {
+            const resolved = await this.findFileInDirectory(root, fileName);
+            if (!resolved) {
+                continue;
+            }
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
+            await vscode.window.showTextDocument(doc, { preserveFocus: false, preview: false });
+            return true;
+        }
+
+        this.output.appendLine(`[Resurrector] File not found for restore step: ${fileName}`);
+        return false;
+    }
+
+    private async logToTerminal(terminal: vscode.Terminal, message: string, postDelayMs = 700): Promise<void> {
+        this.output.appendLine(message);
+        terminal.sendText(`echo "${message}"`);
+        if (postDelayMs > 0) {
+            await this.sleep(postDelayMs);
+        }
+    }
+
+    private getSearchRoots(): string[] {
+        const roots = new Set<string>();
+
+        for (const folder of vscode.workspace.workspaceFolders || []) {
+            roots.add(folder.uri.fsPath);
+        }
+
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const repoRoot = path.resolve(extensionRoot, '..');
+        roots.add(extensionRoot);
+        roots.add(repoRoot);
+
+        return [...roots];
+    }
+
+    private async findFileInDirectory(root: string, fileName: string): Promise<string | null> {
+        if (!fs.existsSync(root)) {
+            return null;
+        }
+
+        const stack: string[] = [root];
+        while (stack.length > 0) {
+            const current = stack.pop();
+            if (!current) {
+                continue;
+            }
+
+            let entries: fs.Dirent[] = [];
+            try {
+                entries = await fs.promises.readdir(current, { withFileTypes: true });
+            } catch {
+                continue;
+            }
+
+            for (const entry of entries) {
+                if (entry.name === 'node_modules' || entry.name === '.git') {
+                    continue;
+                }
+
+                const full = path.join(current, entry.name);
+                if (entry.isDirectory()) {
+                    stack.push(full);
+                    continue;
+                }
+
+                if (entry.isFile() && entry.name.toLowerCase() === fileName.toLowerCase()) {
+                    return full;
+                }
+            }
+        }
+
+        return null;
     }
 }
 

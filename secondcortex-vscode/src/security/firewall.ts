@@ -174,7 +174,11 @@ export class SemanticFirewall {
 
         if (redactionCount > 0) {
             this.output.appendLine(
-                `[SemanticFirewall] 🔒 Redacted ${redactionCount} potential secret(s) using AST & Regex.`
+                `[Agent:Retrieving][SemanticFirewall] Redacted ${redactionCount} potential secret(s) using AST and regex.`
+            );
+        } else {
+            this.output.appendLine(
+                '[Agent:Retrieving][SemanticFirewall] Scan complete. No secrets redacted.'
             );
         }
 
@@ -187,6 +191,8 @@ export class SemanticFirewall {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) { return; }
 
+        const defaultPatterns = ['.env', '**/.env', 'secrets/**', '**/secrets/**'];
+
         const cortexIgnorePath = path.join(workspaceRoot, '.cortexignore');
         try {
             if (fs.existsSync(cortexIgnorePath)) {
@@ -195,10 +201,16 @@ export class SemanticFirewall {
                     .split('\n')
                     .map((line) => line.trim())
                     .filter((line) => line.length > 0 && !line.startsWith('#'));
+                for (const pattern of defaultPatterns) {
+                    if (!this.ignorePatterns.includes(pattern)) {
+                        this.ignorePatterns.push(pattern);
+                    }
+                }
                 this.output.appendLine(
                     `[SemanticFirewall] Loaded ${this.ignorePatterns.length} patterns from .cortexignore`
                 );
             } else {
+                this.ignorePatterns = [...defaultPatterns];
                 this.output.appendLine('[SemanticFirewall] No .cortexignore found — using defaults.');
             }
         } catch (err) {

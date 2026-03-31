@@ -373,6 +373,9 @@ export default function LandingPage() {
           >
             Team Cortex
           </button>
+          <a className="nav-login" href="/thesis">
+            Thesis
+          </a>
           <a className="nav-login" href="/login">
             Login
           </a>
