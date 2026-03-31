@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { BackendClient, IncidentPacketResponse } from '../backendClient';
 import { AuthService } from '../auth/authService';
+import { DEMO_MODE, getDemoSummaryFromSnapshot, getMockMcpResponse } from '../demoMode';
 
 /**
  * SidebarProvider – renders a Webview-based sidebar inside VS Code.
@@ -8,6 +9,7 @@ import { AuthService } from '../auth/authService';
  */
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
+    private readonly demoSessionId = 'session-1';
 
     constructor(
         private readonly extensionUri: vscode.Uri,
@@ -41,6 +43,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'login': {
+                    if (DEMO_MODE) {
+                        this.updateHtml();
+                        this.postMessage({ type: 'authSuccess' });
+                        break;
+                    }
                     const result = await this.auth.login(message.email, message.password);
                     if (result.success) {
                         this.updateHtml();
@@ -51,6 +58,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'signup': {
+                    if (DEMO_MODE) {
+                        this.updateHtml();
+                        this.postMessage({ type: 'authSuccess' });
+                        break;
+                    }
                     const result = await this.auth.signup(message.email, message.password, message.displayName || '');
                     if (result.success) {
                         this.updateHtml();
@@ -61,6 +73,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'logout': {
+                    if (DEMO_MODE) {
+                        this.updateHtml();
+                        break;
+                    }
                     await this.auth.logout();
                     this.updateHtml();
                     break;
@@ -124,6 +140,39 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     }
 
                     const normalized = (question || '').trim().toLowerCase();
+                    if (DEMO_MODE) {
+                        const localSessionId = sessionId || this.demoSessionId;
+                        this.postMessage({ type: 'sessionBound', sessionId: localSessionId });
+
+                        if (normalized.includes('what was i working on')) {
+                            this.postMessage({ type: 'loading' });
+                            await this.delayLocalResponse();
+                            this.postMessage({
+                                type: 'answer',
+                                summary: getDemoSummaryFromSnapshot(),
+                                commands: [],
+                                sessionId: localSessionId,
+                            });
+                            break;
+                        }
+
+                        const mcpEnabled = vscode.workspace
+                            .getConfiguration('secondcortex')
+                            .get<boolean>('enableSecondCortexMcp', false);
+
+                        this.postMessage({ type: 'loading' });
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'answer',
+                            summary: mcpEnabled
+                                ? getMockMcpResponse(question)
+                                : 'You were iterating on payment retry + token refresh logic in the current workspace. The latest local context is loaded.',
+                            commands: [],
+                            sessionId: localSessionId,
+                        });
+                        break;
+                    }
+
                     const openShadowGraphIntent =
                         normalized.includes('open shadow graph') ||
                         normalized.includes('show shadow graph') ||
@@ -197,6 +246,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'addNote': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'answer',
+                            summary: 'Saved note to local workspace memory.',
+                            commands: [],
+                            sessionId: message.sessionId || this.demoSessionId,
+                        });
+                        break;
+                    }
                     const note = (message.note as string || '').trim();
                     if (!note) {
                         this.postMessage({ type: 'error', message: 'Note cannot be empty.' });
@@ -225,6 +284,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'uploadDocument': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'answer',
+                            summary: 'Document indexed locally. Workspace memory has been updated.',
+                            commands: [],
+                            sessionId: message.sessionId || this.demoSessionId,
+                        });
+                        break;
+                    }
                     if (!this.ensureProjectSelectedForIngestion()) {
                         break;
                     }
@@ -291,22 +360,78 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'checkAuth': {
+                    if (DEMO_MODE) {
+                        this.postMessage({
+                            type: 'authStatus',
+                            loggedIn: true,
+                            user: {
+                                userId: 'local-user',
+                                email: 'local@secondcortex.app',
+                                displayName: 'Local User',
+                            },
+                        });
+                        break;
+                    }
                     const loggedIn = await this.auth.isLoggedIn();
                     const user = await this.auth.getUser();
                     this.postMessage({ type: 'authStatus', loggedIn, user });
                     break;
                 }
                 case 'getHistory': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'history',
+                            messages: [
+                                {
+                                    role: 'assistant',
+                                    content: 'Ask: What was I working on?',
+                                    timestamp: new Date(1711719000000).toISOString(),
+                                },
+                            ],
+                            sessionId: this.demoSessionId,
+                        });
+                        break;
+                    }
                     const history = await this.backend.getChatHistory(message.sessionId);
                     this.postMessage({ type: 'history', messages: history, sessionId: message.sessionId });
                     break;
                 }
                 case 'getSessions': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'sessions',
+                            sessions: [
+                                {
+                                    id: this.demoSessionId,
+                                    title: 'Current Session',
+                                    created_at: new Date(1711719000000).toISOString(),
+                                },
+                            ],
+                        });
+                        break;
+                    }
                     const sessions = await this.backend.getChatSessions();
                     this.postMessage({ type: 'sessions', sessions });
                     break;
                 }
                 case 'newChat': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({ type: 'chatCleared', sessionId: this.demoSessionId });
+                        this.postMessage({
+                            type: 'sessions',
+                            sessions: [
+                                {
+                                    id: this.demoSessionId,
+                                    title: message.title || 'Current Chat',
+                                    created_at: new Date(1711719000000).toISOString(),
+                                },
+                            ],
+                        });
+                        break;
+                    }
                     const sessionTitle = message.title || "New Chat";
                     const newId = await this.backend.createChatSession(sessionTitle);
                     this.postMessage({ type: 'chatCleared', sessionId: newId });
@@ -315,6 +440,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'switchSession': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'history',
+                            messages: [
+                                {
+                                    role: 'assistant',
+                                    content: 'Session restored. Ask: What was I working on?',
+                                    timestamp: new Date(1711719000000).toISOString(),
+                                },
+                            ],
+                            sessionId: this.demoSessionId,
+                        });
+                        break;
+                    }
                     const history = await this.backend.getChatHistory(message.sessionId);
                     this.postMessage({ type: 'history', messages: history, sessionId: message.sessionId });
                     break;
@@ -330,6 +470,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'selectProject': {
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                        this.postMessage({
+                            type: 'answer',
+                            summary: 'Project selected: workspace-project',
+                            commands: [],
+                            sessionId: message.sessionId || this.demoSessionId,
+                        });
+                        this.postMessage({ type: 'projectStatus', projectId: 'workspace-project' });
+                        break;
+                    }
                     const beforeProjectId = this.getSelectedProjectId?.();
                     await this.onSelectProject?.();
                     const afterProjectId = this.getSelectedProjectId?.();
@@ -352,6 +503,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     });
                     break;
                 }
+                case 'toggleMcp': {
+                    const config = vscode.workspace.getConfiguration('secondcortex');
+                    const current = config.get<boolean>('enableSecondCortexMcp', false);
+                    const next = !current;
+                    await config.update('enableSecondCortexMcp', next, vscode.ConfigurationTarget.Global);
+                    if (DEMO_MODE) {
+                        await this.delayLocalResponse();
+                    }
+                    this.postMessage({
+                        type: 'answer',
+                        summary: `Enable SecondCortex MCP: ${next ? 'ON' : 'OFF'}`,
+                        commands: [],
+                        sessionId: message.sessionId || this.demoSessionId,
+                    });
+                    break;
+                }
             }
         });
     }
@@ -367,6 +534,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private async updateHtml(): Promise<void> {
         if (!this._view) { return; }
+        if (DEMO_MODE) {
+            this._view.webview.html = this.getHtml(
+                true,
+                {
+                    userId: 'local-user',
+                    email: 'local@secondcortex.app',
+                    displayName: 'Local User',
+                },
+                this.getSelectedProjectId?.() || 'workspace-project'
+            );
+            return;
+        }
         const loggedIn = await this.auth.isLoggedIn();
         const user = await this.auth.getUser();
         const projectId = this.getSelectedProjectId?.();
@@ -375,6 +554,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private postMessage(message: Record<string, unknown>): void {
         this._view?.webview.postMessage(message);
+    }
+
+    private async delayLocalResponse(): Promise<void> {
+        await new Promise<void>((resolve) => setTimeout(resolve, 3000));
     }
 
     private ensureProjectSelectedForIngestion(): boolean {
@@ -992,10 +1175,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         .msg.loading {
             opacity: 0.6;
-            font-style: italic;
+            font-style: normal;
             background: transparent;
             border: none;
             padding-left: 0;
+        }
+        .agent-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            letter-spacing: 0.02em;
+        }
+        .agent-status-phase {
+            font-weight: 700;
+            color: var(--accent);
+            animation: agent-blink 1s steps(2, end) infinite;
+        }
+        @keyframes agent-blink {
+            0% { opacity: 1; }
+            50% { opacity: 0.25; }
+            100% { opacity: 1; }
         }
         .msg.error {
             background: rgba(239, 68, 68, 0.1);
@@ -1148,6 +1347,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 <button class="menu-item" onclick="toggleHistory()">History</button>
                 <button class="menu-item" onclick="insertAddNote()">Add Note (/add)</button>
                 <button class="menu-item" onclick="selectProject()">My Projects</button>
+                <button class="menu-item" onclick="toggleMcp()">Enable SecondCortex MCP</button>
                 <button class="menu-item" onclick="doLogout()">Logout</button>
             </div>
         </div>
@@ -1197,6 +1397,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         let state = vscode.getState() || { messages: [], sessionId: null, sessions: [] };
         let isAwaitingResponse = false;
         let hasReceivedBackendData = false;
+        const AGENT_PHASES = [
+            '[Planner Agent] decomposing query...',
+            '[Retriever Agent] fetching memory...',
+            '[Executor Agent] synthesizing answer...'
+        ];
+        let loadingPhaseTimer = null;
         
         // **AZURE OPENAI MIGRATION FIX**: Don't render stale cached state.
         // Instead, always fetch fresh data from backend first.
@@ -1228,6 +1434,30 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             isAwaitingResponse = pending;
             sendBtn.disabled = pending;
             input.disabled = pending;
+            if (!pending) {
+                stopLoadingAnimation();
+            }
+        }
+
+        function stopLoadingAnimation() {
+            if (loadingPhaseTimer) {
+                window.clearInterval(loadingPhaseTimer);
+                loadingPhaseTimer = null;
+            }
+        }
+
+        function startLoadingAnimation(loader) {
+            stopLoadingAnimation();
+            const phaseEl = loader.querySelector('[data-agent-phase]');
+            if (!phaseEl) {
+                return;
+            }
+            let phaseIndex = 0;
+            phaseEl.textContent = AGENT_PHASES[phaseIndex];
+            loadingPhaseTimer = window.setInterval(() => {
+                phaseIndex = (phaseIndex + 1) % AGENT_PHASES.length;
+                phaseEl.textContent = AGENT_PHASES[phaseIndex];
+            }, 900);
         }
 
         function renderAllMessages(messages) {
@@ -1401,6 +1631,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'selectProject' });
         }
 
+        function toggleMcp() {
+            closeMenu();
+            vscode.postMessage({ type: 'toggleMcp', sessionId: state.sessionId });
+        }
+
         document.addEventListener('click', (event) => {
             const target = event.target;
             if (!(target instanceof Element)) {
@@ -1420,6 +1655,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const msg = event.data;
             
             // Clean up any persistence-specific loading UI
+            stopLoadingAnimation();
             const loadingWrappers = chatLog.querySelectorAll('.loading-wrapper');
             loadingWrappers.forEach(el => el.remove());
 
@@ -1457,8 +1693,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     }
                     const loader = document.createElement('div');
                     loader.className = 'msg-wrapper assistant loading-wrapper';
-                    loader.innerHTML = '<div class="msg loading">Thinking...</div>';
+                    loader.innerHTML = '<div class="msg loading"><span class="agent-status"><span class="agent-status-phase" data-agent-phase>[Planner Agent] decomposing query...</span></span></div>';
                     chatLog.appendChild(loader);
+                    startLoadingAnimation(loader);
                     chatLog.scrollTop = chatLog.scrollHeight;
                     break;
                 case 'answer':

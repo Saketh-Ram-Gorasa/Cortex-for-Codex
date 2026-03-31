@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SecondCortex - Logo Reveal</title>
+<!-- Tailwind CSS v3 CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<style data-purpose="brand-typography">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #ffffff;
+    }
+  </style>
+<style data-purpose="layout-optimizations">
+    /* Ensuring the mobile viewport is handled correctly for high-fidelity presentation */
+    .ios-safe-area {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    
+    /* Subtle fade-in for a premium feel */
+    .fade-in {
+      animation: fadeIn 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
+    }
+  </style>
+</head>
+<body class="bg-white antialiased overflow-hidden">
+<!-- BEGIN: MainContainer -->
+<!-- This container fills the entire screen to center the logo perfectly -->
+<main class="flex items-center justify-center min-h-screen w-full ios-safe-area" data-purpose="branding-container">
+<!-- BEGIN: LogoBlock -->
+<!-- The focal point: A minimalist, high-end startup logo for SecondCortex -->
+<div class="flex flex-col items-center justify-center fade-in" data-purpose="logo-wrapper">
+<!-- Logo Image -->
+<!-- Dimensions are set to ensure the icon remains crisp and appropriately sized on mobile -->
+<img alt="SecondCortex Logo - Abstract interlocking symbol representing a recursive loop and cognitive network" class="w-48 h-48 md:w-64 md:h-64 object-contain" id="main-logo" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDggd8ixrCMw1KSB-WKYYfutWCGlUXkW4H_WdM_HnhZ9jA6vVuxUjpFvBPES4bd9JsJnEp_X-MYHs7C-oHMM7o3i8FxUgf8PCERwFHfDgxwZrJRA1zKrydkLoEHvkEZ_E5MpF9Cb2mRyzINBWBXi1cWNH7bQGBECxhEefF87pjMGx64_T7sY_sBBN_h3tiGaL9AgyB14WWxGhCtbiJ6_n9wsBh5OSXs0n8IUVTcFbwA5LSXPUAeY_9YQVZA2diEEkvxU7IP2vNfAQQ"/>
+<!-- Optional: Minimalist Brand Text -->
+<!-- Hidden by default as per the 'only the logo' request, but structured for easy activation -->
+<h1 class="sr-only">SecondCortex</h1>
+</div>
+<!-- END: LogoBlock -->
+</main>
+<!-- END: MainContainer -->
+<!-- BEGIN: Interactions -->
+<script data-purpose="haptic-simulation">
+    // This script is prepared for future interaction logic 
+    // such as a subtle transition after the logo reveal.
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('SecondCortex brand assets loaded.');
+    });
+  </script>
+<!-- END: Interactions -->
+</body></html>

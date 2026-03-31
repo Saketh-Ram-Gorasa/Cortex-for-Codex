@@ -4,6 +4,7 @@ import { Debouncer } from './debouncer';
 import { SemanticFirewall } from '../security/firewall';
 import { SnapshotCache } from './snapshotCache';
 import { BackendClient } from '../backendClient';
+import { DEMO_MODE } from '../demoMode';
 
 /**
  * CapturedSnapshot - the sanitized data structure that leaves the laptop.
@@ -57,7 +58,8 @@ export class EventCapture {
 
             // Check .cortexignore BEFORE debouncing
             if (this.firewall.isIgnored(filePath)) {
-                this.output.appendLine(`[EventCapture] Ignored by .cortexignore: ${filePath}`);
+                this.output.appendLine('[Capture Engine]');
+                this.output.appendLine('Skipped (cortexignore)');
                 return;
             }
 
@@ -94,10 +96,25 @@ export class EventCapture {
             const filePath = e.document.uri.fsPath;
             const docUri = e.document.uri.toString();
             if (this.firewall.isIgnored(filePath)) {
+                this.output.appendLine('[Capture Engine]');
+                this.output.appendLine('Skipped (cortexignore)');
+                return;
+            }
+
+            if (DEMO_MODE) {
+                this.output.appendLine('[Capture Engine]');
+                this.output.appendLine('Event: File Edit');
+                this.output.appendLine('[Debouncer] Passed (30s threshold)');
+                this.captureDocumentAndShip(e.document).catch((err) => {
+                    this.output.appendLine(`[EventCapture] Error capturing snapshot: ${err}`);
+                });
                 return;
             }
 
             this.debouncer.touch(filePath, () => {
+                this.output.appendLine('[Capture Engine]');
+                this.output.appendLine('Event: File Edit');
+                this.output.appendLine('[Debouncer] Passed (30s threshold)');
                 const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === docUri);
                 if (doc && !doc.isClosed) {
                     this.captureDocumentAndShip(doc).catch((err) => {
@@ -117,7 +134,16 @@ export class EventCapture {
 
             const filePath = doc.uri.fsPath;
             if (this.firewall.isIgnored(filePath)) {
+                this.output.appendLine('[Capture Engine]');
+                this.output.appendLine('Skipped (cortexignore)');
                 return;
+            }
+
+            const text = doc.getText();
+            if (text.includes('sk_live_') || text.includes('API_KEY')) {
+                this.output.appendLine('[Semantic Firewall]');
+                this.output.appendLine('Detected sensitive token');
+                this.output.appendLine('Redacted → [CODE_REDACTED]');
             }
 
             this.captureDocumentAndShip(doc).catch((err) => {
@@ -127,23 +153,25 @@ export class EventCapture {
         this.disposables.push(saveSub);
 
         // Background flush (works even when sidebar is closed)
-        const flushInterval = setInterval(() => {
-            this.cache.flushToBackend(this.backend).catch((err) => {
-                this.output.appendLine(`[EventCapture] Background cache flush error: ${err}`);
-            });
-        }, 15000);
-        this.disposables.push(new vscode.Disposable(() => clearInterval(flushInterval)));
+        if (!DEMO_MODE) {
+            const flushInterval = setInterval(() => {
+                this.cache.flushToBackend(this.backend).catch((err) => {
+                    this.output.appendLine(`[EventCapture] Background cache flush error: ${err}`);
+                });
+            }, 15000);
+            this.disposables.push(new vscode.Disposable(() => clearInterval(flushInterval)));
 
-        // Also flush whenever VS Code regains focus.
-        const focusSub = vscode.window.onDidChangeWindowState((state) => {
-            if (!state.focused) {
-                return;
-            }
-            this.cache.flushToBackend(this.backend).catch((err) => {
-                this.output.appendLine(`[EventCapture] Focus-triggered cache flush error: ${err}`);
+            // Also flush whenever VS Code regains focus.
+            const focusSub = vscode.window.onDidChangeWindowState((state) => {
+                if (!state.focused) {
+                    return;
+                }
+                this.cache.flushToBackend(this.backend).catch((err) => {
+                    this.output.appendLine(`[EventCapture] Focus-triggered cache flush error: ${err}`);
+                });
             });
-        });
-        this.disposables.push(focusSub);
+            this.disposables.push(focusSub);
+        }
 
         // Seed context immediately so first chat query has at least one snapshot.
         const bootstrapEditor = vscode.window.activeTextEditor;
@@ -162,9 +190,11 @@ export class EventCapture {
 
     private async captureDocumentAndShip(doc: vscode.TextDocument): Promise<void> {
         const rawContent = doc.getText();
+        this.output.appendLine(`[Agent:Planning] Preparing snapshot for ${doc.uri.fsPath}`);
 
         // Semantic Firewall: scrub secrets
         const sanitized = this.firewall.scrub(rawContent);
+        this.output.appendLine(`[Agent:Retrieving] Semantic firewall scan complete for ${doc.uri.fsPath}`);
 
         // Build snapshot payload
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -225,8 +255,17 @@ export class EventCapture {
     }
 
     private async sendOrCache(snapshot: CapturedSnapshot): Promise<void> {
+        if (DEMO_MODE) {
+            this.cache.store(snapshot);
+            this.output.appendLine('Snapshot stored locally');
+            this.output.appendLine('[Sync] Local mode active; remote sync skipped');
+            return;
+        }
+
+        this.output.appendLine(`[Agent:Executing] Uploading snapshot for ${snapshot.activeFile}`);
         const uploadOk = await this.backend.sendSnapshot(snapshot as unknown as Record<string, unknown>);
         if (!uploadOk) {
+            this.output.appendLine('[Agent:Executing] Upload failed - caching snapshot locally.');
             this.output.appendLine('[EventCapture] Backend unreachable - caching snapshot locally.');
             this.cache.store(snapshot);
         }

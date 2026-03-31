@@ -74,4 +74,8 @@ auth.db
 CODEBASE_ANALYSIS.md
 design.md
 backend_logs.txt
-scripts/
+/scripts/
+/mock/
+/test/
+/tests/
+Sourceoftruth.md
