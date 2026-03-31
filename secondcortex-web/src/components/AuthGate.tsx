@@ -8,6 +8,8 @@ import ProjectSelector from '@/components/ProjectSelector';
 import ProjectManager from '@/components/ProjectManager';
 import TeamDashboard from '@/components/team/TeamDashboard';
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
 type SessionMode = 'developer' | 'pm';
 
 interface TeamInfo {
@@ -69,6 +71,18 @@ export default function AuthGate() {
     const params = new URLSearchParams(window.location.search);
     const pmQuery = params.get('pm') === 'true';
     const guestQuery = params.get('guest') === 'true';
+
+    if (DEMO_MODE) {
+      const nextMode: SessionMode = pmQuery ? 'pm' : 'developer';
+      const nextGuest = nextMode === 'pm' && guestQuery;
+      setSessionMode(nextMode);
+      setIsPmGuest(nextGuest);
+      setIsDevGuest(nextMode === 'developer');
+      setToken('demo-token');
+      setIsChecking(false);
+      return;
+    }
+
     const storedPmGuest = localStorage.getItem('sc_pm_guest_mode') === 'true';
     const storedPmAuth = localStorage.getItem('sc_pm_mode') === 'auth' || storedPmGuest;
     const storedDevGuest = localStorage.getItem('sc_dev_guest_mode') === 'true';
@@ -103,6 +117,11 @@ export default function AuthGate() {
   }, [router]);
 
   const fetchMcpKey = async (authToken: string) => {
+    if (DEMO_MODE) {
+      setMcpKey('mcp_demo_local_key');
+      setMcpKeyId('demo-key-id');
+      return;
+    }
     try {
       const res = await fetch(`${backendUrl}/api/v1/auth/mcp-key`, {
         headers: { Authorization: `Bearer ${authToken}` },

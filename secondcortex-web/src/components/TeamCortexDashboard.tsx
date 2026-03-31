@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
 interface TeamCortexDashboardProps {
   token: string;
@@ -58,6 +60,15 @@ interface ChatMessage {
   text: string;
 }
 
+interface MockTeamData {
+  team?: TeamInfo;
+  developers?: Array<{ id: string; name: string }>;
+  projects?: ProjectItem[];
+  snapshotsByProject?: Record<string, ProjectSnapshot[]>;
+  evolutionByProject?: Record<string, { daily?: EvolutionEntry[]; feature?: EvolutionEntry[] }>;
+  pmResponses?: Record<string, string>;
+}
+
 function toEpochMs(ts: number): number {
   if (ts > 10_000_000_000) {
     return ts;
@@ -108,6 +119,7 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
       text: 'Welcome to Team Cortex. Ask about project evolution, delivery risk, or latest team outcomes.',
     },
   ]);
+  const [mockData, setMockData] = useState<MockTeamData | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +156,34 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
         setError(null);
       }
       try {
+        if (DEMO_MODE) {
+          const res = await fetch('/mock/mockTeamData.json', { cache: 'no-store' });
+          if (!res.ok) {
+            throw new Error('Unable to load local team mock data.');
+          }
+          const localMock = (await res.json()) as MockTeamData;
+          const mockProjects = Array.isArray(localMock.projects) ? localMock.projects : [];
+          const nextProjectId = selectedProjectId || mockProjects[0]?.id || null;
+
+          if (!cancelled) {
+            setMockData(localMock);
+            setTeamId(localMock.team?.id || 'team-demo-1');
+            setProjects(mockProjects);
+            if (!selectedProjectId && nextProjectId) {
+              setSelectedProjectId(nextProjectId);
+            }
+
+            const projectId = nextProjectId || '';
+            const snapshots = (localMock.snapshotsByProject?.[projectId] || []).slice();
+            const entries = localMock.evolutionByProject?.[projectId]?.[timelineMode] || [];
+            setProjectSnapshots(snapshots);
+            setEvolutionEntries(entries);
+            setProjectSnapshotError('');
+            setLoading(false);
+          }
+          return;
+        }
+
         const resolvedTeamId = await resolveTeamId();
         if (!cancelled) {
           setTeamId(resolvedTeamId);
@@ -267,6 +307,19 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
     setChatPending(true);
 
     try {
+      if (DEMO_MODE) {
+        const normalized = trimmed.toLowerCase();
+        const pmResponses = mockData?.pmResponses || {};
+        const answer = normalized.includes('risk')
+          ? pmResponses.risk || pmResponses.default || 'No deterministic PM risk response configured.'
+          : normalized.includes('timeline')
+            ? pmResponses.timeline || pmResponses.default || 'No deterministic PM timeline response configured.'
+            : pmResponses.default || 'No deterministic PM response configured.';
+
+        setMessages((prev) => [...prev, { role: 'assistant', text: answer }]);
+        return;
+      }
+
       const selectedProject = projects.find((p) => p.id === selectedProjectId);
       const topTimeline = evolutionEntries.slice(0, 12);
       const projectContext = selectedProject
