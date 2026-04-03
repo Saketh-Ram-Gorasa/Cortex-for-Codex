@@ -77,6 +77,11 @@ from services.git_ingest import RetroGitIngestionService
 from services.external_ingest import ExternalIngestionService
 from services.azure_document_intelligence import AzureDocumentIntelligenceService
 from services.incident_archaeology import IncidentArchaeologyService
+from services.human_interaction_harness import (
+    apply_human_interaction_harness,
+    normalize_interaction_mode,
+    parse_deny_patterns,
+)
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -971,11 +976,11 @@ async def handle_query(
     try:
         logger.info("Query received: %s (user=%s, session=%s)", req.question, user_id, session_id)
 
-        # Step 1: Plan - break the question into search tasks
-        plan_result = await planner.plan(req.question, user_id=user_id)
-
-        # Step 2: Dual retrieval (facts + snapshots)
-        facts = await vector_db.recall_facts(req.question, top_k=5, user_id=user_id, min_salience=0.3)
+        # Step 1-2: Plan and fact recall in parallel; they are independent reads.
+        plan_result, facts = await asyncio.gather(
+            planner.plan(req.question, user_id=user_id),
+            vector_db.recall_facts(req.question, top_k=5, user_id=user_id, min_salience=0.3),
+        )
         retrieved_facts = [{"id": f.get("id"), "content": f.get("document"), "kind": f.get("kind"), "salience": f.get("salience")} for f in facts]
         retrieved_snapshots = [{"id": item.get("id"), "timestamp": item.get("timestamp"), "file": item.get("activeFile"), "branch": item.get("gitBranch")} for item in plan_result.retrieved_context[:5]]
 
@@ -997,6 +1002,17 @@ async def handle_query(
                     }
                 )
             response.sources = source_candidates
+
+        interaction_mode = normalize_interaction_mode(settings.human_interaction_mode)
+        safe_commands, interaction = apply_human_interaction_harness(
+            list(response.commands or []),
+            mode=interaction_mode,
+            deny_patterns=parse_deny_patterns(settings.human_interaction_deny_patterns),
+            max_actions=settings.human_interaction_max_actions,
+            context_label="query",
+        )
+        response.commands = safe_commands
+        response.interaction = interaction
 
         # Step 4: Enrich response with retrieved facts and snapshots
         response.retrieved_facts = retrieved_facts
@@ -1180,10 +1196,20 @@ async def handle_resurrection(
         current_workspace=request.current_workspace,
     )
 
+    interaction_mode = normalize_interaction_mode(settings.human_interaction_mode)
+    safe_commands, interaction = apply_human_interaction_harness(
+        list(commands or []),
+        mode=interaction_mode,
+        deny_patterns=parse_deny_patterns(settings.human_interaction_deny_patterns),
+        max_actions=settings.human_interaction_max_actions,
+        context_label="resurrection",
+    )
+
     return ResurrectionResponse(
-        commands=commands,
+        commands=safe_commands,
         impact_analysis=impact,
         planSummary=plan_summary,
+        interaction=interaction,
     )
 
 
