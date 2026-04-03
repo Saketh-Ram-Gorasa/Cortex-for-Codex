@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     pm_guest_token_expiry_seconds: int = Field(8 * 3600, validation_alias="PM_GUEST_TOKEN_EXPIRY_SECONDS")
     project_scoped_ingestion_enabled: bool = Field(False, validation_alias="PROJECT_SCOPED_INGESTION_ENABLED")
 
+    # Human interaction harness (command gating + confirmation semantics)
+    human_interaction_mode: str = Field("prompt", validation_alias="HUMAN_INTERACTION_MODE")
+    human_interaction_max_actions: int = Field(8, validation_alias="HUMAN_INTERACTION_MAX_ACTIONS")
+    human_interaction_deny_patterns: str = Field(
+        "rm -rf,git reset --hard,del /f,format c:,shutdown,reboot,mkfs,dd if=",
+        validation_alias="HUMAN_INTERACTION_DENY_PATTERNS",
+    )
+
     # MCP hardening and rollout controls
     mcp_dns_rebinding_protection_enabled: bool = Field(
         True,

@@ -246,6 +246,28 @@ class ResurrectionCommand(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class HumanInteractionDecision(BaseModel):
+    action_id: str = Field(..., alias="actionId")
+    command_type: str = Field(..., alias="commandType")
+    decision: Literal["allow", "ask", "deny"]
+    risk: Literal["low", "medium", "high", "critical"]
+    reason: str
+    command_preview: str = Field("", alias="commandPreview")
+
+    model_config = {"populate_by_name": True}
+
+
+class HumanInteractionEnvelope(BaseModel):
+    mode: Literal["allow", "prompt", "read_only"]
+    requires_confirmation: bool = Field(False, alias="requiresConfirmation")
+    prompt: str = ""
+    decisions: list[HumanInteractionDecision] = Field(default_factory=list)
+    allowed_actions: list[str] = Field(default_factory=list, alias="allowedActions")
+    denied_actions: list[str] = Field(default_factory=list, alias="deniedActions")
+
+    model_config = {"populate_by_name": True}
+
+
 class QueryResponse(BaseModel):
     summary: str
     reasoningLog: list[str] = Field(default_factory=list, alias="reasoningLog")
@@ -253,6 +275,7 @@ class QueryResponse(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     retrieved_facts: list[dict] = Field(default_factory=list, alias="retrievedFacts")
     retrieved_snapshots: list[dict] = Field(default_factory=list, alias="retrievedSnapshots")
+    interaction: HumanInteractionEnvelope | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -294,6 +317,7 @@ class ResurrectionResponse(BaseModel):
     commands: list[ResurrectionCommand]
     impact_analysis: SafetyReport | None = None
     plan_summary: str | None = Field(None, alias="planSummary")
+    interaction: HumanInteractionEnvelope | None = None
 
 
 # ── Retroactive Git Ingestion ───────────────────────────────

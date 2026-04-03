@@ -2,19 +2,18 @@
 
 /**
  * cortex CLI Wrapper
- * 
+ *
  * This CLI delegates commands to the SecondCortex VS Code extension
- * using URL handlers.
+ * using URL handlers so the extension can use its existing secure session.
  */
 
 const { exec } = require('child_process');
 const path = require('path');
 
-// Command line arguments (skip node and script path)
-const args = process.argv.slice(2);
+const EXTENSION_URI_PREFIX = 'vscode://secondcortex-labs.secondcortex';
 
-if (args.length === 0) {
-    console.log(`
+function printHelp(io = console) {
+    io.log(`
 🧠 SecondCortex CLI
 
 Commands:
@@ -22,62 +21,99 @@ Commands:
   resurrect [target]   Resurrects a workspace state (latest by default).
 
 Examples:
+    cortex ingest
     cortex ingest --project-id proj_123
-        cortex ingest --project-name "SusyDB Test"
-    cortex ingest --repo-path . --project-id proj_123 --max-commits 250
+    cortex ingest --project-name "SusyDB Test"
+    cortex ingest --repo-path . --max-commits 250
   cortex resurrect
   cortex resurrect feature/auth-fix
 `);
-    process.exit(0);
 }
 
-const command = args[0];
-
-if (command === 'resurrect') {
-    const target = args[1] || 'latest';
-    console.log(`[SecondCortex] Requesting workspace resurrection for: ${target}`);
-
-    // Construct the vscode:// URI to trigger the handler in the extension
-    // URI Format: vscode://<publisher>.<extension-name>/<path>?<query>
-    const uri = `vscode://secondcortex-labs.secondcortex/resurrect?${encodeURIComponent(target)}`;
-
-    let openCmd;
-    if (process.platform === 'win32') {
-        openCmd = `start "" "${uri}"`;
-    } else if (process.platform === 'darwin') {
-        openCmd = `open "${uri}"`;
-    } else {
-        openCmd = `xdg-open "${uri}"`;
+function buildCommandUri(command, payload) {
+    if (command === 'resurrect') {
+        const target = String(payload && payload.target ? payload.target : 'latest').trim() || 'latest';
+        return `${EXTENSION_URI_PREFIX}/resurrect?${encodeURIComponent(target)}`;
     }
 
-    exec(openCmd, (error) => {
-        if (error) {
-            console.error('\n❌ Failed to send command to VS Code.');
-            console.error('Ensure VS Code is installed and the SecondCortex extension is active.');
-            console.error(error.message);
-            process.exit(1);
+    if (command === 'ingest') {
+        const params = new URLSearchParams();
+        params.set('repoPath', path.resolve(payload && payload.repoPath ? payload.repoPath : process.cwd()));
+        params.set('maxCommits', String(payload && payload.maxCommits ? payload.maxCommits : 300));
+        params.set('maxPullRequests', String(payload && payload.maxPullRequests !== undefined ? payload.maxPullRequests : 30));
+        params.set('includePullRequests', payload && payload.includePullRequests === false ? 'false' : 'true');
+
+        const projectId = String(payload && payload.projectId ? payload.projectId : '').trim();
+        const projectName = String(payload && payload.projectName ? payload.projectName : '').trim();
+        const backendUrl = String(payload && payload.backendUrl ? payload.backendUrl : '').trim();
+
+        if (projectId) {
+            params.set('projectId', projectId);
         }
-        console.log('✅ Command sent to VS Code successfully.');
-    });
-} else if (command === 'ingest') {
-    const parsed = parseIngestArgs(args.slice(1));
+        if (projectName) {
+            params.set('projectName', projectName);
+        }
+        if (backendUrl) {
+            params.set('backendUrl', backendUrl.replace(/\/$/, ''));
+        }
 
-    const backendUrl = (parsed.backendUrl || process.env.SECONDCORTEX_BACKEND_URL || 'http://localhost:8000').replace(/\/$/, '');
-    const token = parsed.token || process.env.SECONDCORTEX_TOKEN || process.env.SECONDCORTEX_AUTH_TOKEN;
-
-    if (!token) {
-        console.error('❌ Missing auth token. Provide --token or set SECONDCORTEX_TOKEN.');
-        process.exit(1);
+        return `${EXTENSION_URI_PREFIX}/ingest?${params.toString()}`;
     }
 
-    runIngest(parsed, backendUrl, token).catch((err) => {
-        console.error('❌ Failed to run cortex ingest.');
-        console.error(err && err.message ? err.message : String(err));
-        process.exit(1);
+    throw new Error(`Unknown command: ${command}`);
+}
+
+function getOpenCommand(uri, platform = process.platform) {
+    if (platform === 'win32') {
+        return `start "" "${uri}"`;
+    }
+    if (platform === 'darwin') {
+        return `open "${uri}"`;
+    }
+    return `xdg-open "${uri}"`;
+}
+
+function dispatchUri(uri, { execFn = exec, platform = process.platform } = {}) {
+    const openCmd = getOpenCommand(uri, platform);
+
+    return new Promise((resolve, reject) => {
+        execFn(openCmd, (error) => {
+            if (error) {
+                reject(new Error(`Ensure VS Code is installed and the SecondCortex extension is active.\n${error.message}`));
+                return;
+            }
+            resolve();
+        });
     });
-} else {
-    console.error(`Unknown command: ${command}`);
-    process.exit(1);
+}
+
+async function main(cliArgs = process.argv.slice(2), { io = console, execFn = exec, platform = process.platform } = {}) {
+    if (cliArgs.length === 0) {
+        printHelp(io);
+        return 0;
+    }
+
+    const command = cliArgs[0];
+
+    if (command === 'resurrect') {
+        const target = cliArgs[1] || 'latest';
+        io.log(`[SecondCortex] Requesting workspace resurrection for: ${target}`);
+        await dispatchUri(buildCommandUri('resurrect', { target }), { execFn, platform });
+        io.log('✅ Command sent to VS Code successfully.');
+        return 0;
+    }
+
+    if (command === 'ingest') {
+        const parsed = parseIngestArgs(cliArgs.slice(1));
+        const repoPath = path.resolve(parsed.repoPath || process.cwd());
+        io.log(`[SecondCortex] Requesting git history ingest for: ${repoPath}`);
+        await dispatchUri(buildCommandUri('ingest', parsed), { execFn, platform });
+        io.log('✅ Ingest request sent to VS Code.');
+        io.log('   The SecondCortex extension will use your existing login and project context there.');
+        return 0;
+    }
+
+    throw new Error(`Unknown command: ${command}`);
 }
 
 function parseIngestArgs(ingestArgs) {
@@ -86,7 +122,6 @@ function parseIngestArgs(ingestArgs) {
         projectId: '',
         projectName: '',
         backendUrl: process.env.SECONDCORTEX_BACKEND_URL || '',
-        token: process.env.SECONDCORTEX_TOKEN || process.env.SECONDCORTEX_AUTH_TOKEN || '',
         maxCommits: 300,
         maxPullRequests: 30,
         includePullRequests: true,
@@ -117,7 +152,6 @@ function parseIngestArgs(ingestArgs) {
             continue;
         }
         if (arg === '--token' && next) {
-            parsed.token = next;
             index += 1;
             continue;
         }
@@ -146,105 +180,19 @@ function parseIngestArgs(ingestArgs) {
     return parsed;
 }
 
-async function runIngest(parsed, backendUrl, token) {
-    let resolvedProjectId = (parsed.projectId || '').trim();
-    if (!resolvedProjectId && parsed.projectName) {
-        resolvedProjectId = await resolveProjectIdByName({
-            backendUrl,
-            token,
-            projectName: parsed.projectName,
-        });
-    }
-
-    if (!resolvedProjectId) {
-        throw new Error('Missing required target project. Use --project-id <id> or --project-name "<name>".');
-    }
-
-    const payload = {
-        repoPath: path.resolve(parsed.repoPath || process.cwd()),
-        maxCommits: parsed.maxCommits,
-        maxPullRequests: parsed.maxPullRequests,
-        includePullRequests: parsed.includePullRequests,
-        projectId: resolvedProjectId,
-    };
-
-    console.log(`[SecondCortex] Starting cold-start ingest for ${payload.repoPath}`);
-    console.log(`[SecondCortex] Target project: ${payload.projectId}`);
-
-    const response = await fetch(`${backendUrl}/api/v1/ingest/git`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
+if (require.main === module) {
+    main().catch((error) => {
+        console.error('\n❌ Failed to send command to VS Code.');
+        console.error(error && error.message ? error.message : String(error));
+        process.exit(1);
     });
-
-    const text = await response.text();
-    if (!response.ok) {
-        throw new Error(`Ingest failed (${response.status} ${response.statusText}): ${text || 'No response body'}`);
-    }
-
-    let data = {};
-    try {
-        data = text ? JSON.parse(text) : {};
-    } catch {
-        data = { raw: text };
-    }
-
-    const ingested = Number(data.ingestedCount || 0);
-    const commits = Number(data.commitCount || 0);
-    const prs = Number(data.prCount || 0);
-    const skipped = Number(data.skippedCount || 0);
-
-    console.log('✅ Cold-start ingest completed.');
-    console.log(`   ingestedCount=${ingested} commitCount=${commits} prCount=${prs} skippedCount=${skipped}`);
-
-    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-    if (warnings.length > 0) {
-        console.log('⚠️ Warnings:');
-        for (const warning of warnings) {
-            console.log(`   - ${warning}`);
-        }
-    }
 }
 
-async function resolveProjectIdByName({ backendUrl, token, projectName }) {
-    const normalizedTarget = String(projectName || '').trim().toLowerCase();
-    if (!normalizedTarget) {
-        return '';
-    }
-
-    const response = await fetch(`${backendUrl}/api/v1/projects`, {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-        },
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-        throw new Error(`Unable to list projects (${response.status} ${response.statusText}): ${text || 'No response body'}`);
-    }
-
-    let data = {};
-    try {
-        data = text ? JSON.parse(text) : {};
-    } catch {
-        throw new Error('Project lookup returned non-JSON response.');
-    }
-
-    const projects = Array.isArray(data.projects) ? data.projects : [];
-    const exactMatches = projects.filter((project) => String(project.name || '').trim().toLowerCase() === normalizedTarget);
-
-    if (exactMatches.length === 1) {
-        return String(exactMatches[0].id || '').trim();
-    }
-
-    if (exactMatches.length > 1) {
-        const ids = exactMatches.map((project) => String(project.id || '').trim()).filter(Boolean);
-        throw new Error(`Project name "${projectName}" is ambiguous. Use --project-id explicitly. Matches: ${ids.join(', ')}`);
-    }
-
-    throw new Error(`Project name "${projectName}" not found. Create it first or use --project-id.`);
-}
+module.exports = {
+    buildCommandUri,
+    dispatchUri,
+    getOpenCommand,
+    main,
+    parseIngestArgs,
+    printHelp,
+};
