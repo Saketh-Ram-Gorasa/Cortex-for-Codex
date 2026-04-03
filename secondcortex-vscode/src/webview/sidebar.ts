@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { BackendClient, IncidentPacketResponse } from '../backendClient';
+import { BackendClient, HumanInteractionEnvelope, IncidentPacketResponse } from '../backendClient';
 import { AuthService } from '../auth/authService';
 import { DEMO_MODE, getDemoSummaryFromSnapshot, getMockMcpResponse } from '../demoMode';
 
@@ -225,7 +225,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
                     const response = await this.backend.askQuestion(question, sessionId);
                     if (response && !(response as any)._error) {
-                        const styledSummary = this.formatAssistantResponse(response.summary, response.commands ?? [], response.sources ?? []);
+                        const styledSummary = this.formatAssistantResponse(
+                            response.summary,
+                            response.commands ?? [],
+                            response.sources ?? [],
+                            response.interaction ?? null,
+                        );
                         this.postMessage({
                             type: 'answer',
                             summary: styledSummary,
@@ -578,14 +583,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         summary: string,
         commands: unknown[],
         sources: Array<{ type?: string; id?: string; uri?: string }>,
+        interaction?: HumanInteractionEnvelope | null,
     ): string {
         const cleanSummary = (summary || '').trim();
         const commandLines = this.buildCommandLines(commands);
         const sourceLines = this.buildSourceLines(sources);
+        const interactionLines = this.buildInteractionLines(interaction);
 
         const sections: string[] = [];
         if (cleanSummary) {
             sections.push(cleanSummary);
+        }
+        if (interaction?.prompt?.trim()) {
+            sections.push(`Interaction:
+${interaction.prompt.trim()}`);
+        }
+        if (interactionLines.length > 0) {
+            sections.push(`Interaction decisions:\n${interactionLines.map((line) => `- ${line}`).join('\n')}`);
         }
         if (commandLines.length > 0) {
             sections.push(`Suggested actions:\n${commandLines.map((line) => `- ${line}`).join('\n')}`);
@@ -638,6 +652,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         return lines;
+    }
+
+    private buildInteractionLines(interaction?: HumanInteractionEnvelope | null): string[] {
+        if (!interaction?.decisions?.length) {
+            return [];
+        }
+
+        return interaction.decisions.map((decision) => {
+            const preview = decision.commandPreview.trim();
+            const reason = decision.reason.trim();
+            const pieces = [
+                `[${decision.decision}] ${decision.commandType} (${decision.risk})`,
+                reason,
+            ].filter(Boolean);
+
+            if (preview) {
+                pieces.push(`command: ${preview}`);
+            }
+
+            return pieces.join(' — ');
+        });
     }
 
     private formatIncidentPacketResponse(packet: IncidentPacketResponse): string {
@@ -1398,9 +1433,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         let isAwaitingResponse = false;
         let hasReceivedBackendData = false;
         const AGENT_PHASES = [
-            '[Planner Agent] decomposing query...',
-            '[Retriever Agent] fetching memory...',
-            '[Executor Agent] synthesizing answer...'
+            '[Cortex] thinking...',
+            '[Planner Agent] planning search steps...',
+            '[Retriever Agent] retrieving memory and snapshots...',
+            '[Executor Agent] synthesizing answer...',
+            '[Cortex] wrapping up...'
         ];
         let loadingPhaseTimer = null;
         
@@ -1693,7 +1730,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     }
                     const loader = document.createElement('div');
                     loader.className = 'msg-wrapper assistant loading-wrapper';
-                    loader.innerHTML = '<div class="msg loading"><span class="agent-status"><span class="agent-status-phase" data-agent-phase>[Planner Agent] decomposing query...</span></span></div>';
+                    loader.innerHTML = '<div class="msg loading"><span class="agent-status"><span class="agent-status-phase" data-agent-phase>[Cortex] thinking...</span></span></div>';
                     chatLog.appendChild(loader);
                     startLoadingAnimation(loader);
                     chatLog.scrollTop = chatLog.scrollHeight;
