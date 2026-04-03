@@ -1,0 +1,6 @@
+# sample_secrets.py
+
+STRIPE_KEY = "sk_live_abc123456789"
+AWS_SECRET_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+
+

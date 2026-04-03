@@ -74,6 +74,24 @@ export interface IncidentPacketResponse {
     disproofChecks: string[];
 }
 
+export interface HumanInteractionDecision {
+    actionId: string;
+    commandType: string;
+    decision: 'allow' | 'ask' | 'deny';
+    risk: 'low' | 'medium' | 'high' | 'critical';
+    reason: string;
+    commandPreview: string;
+}
+
+export interface HumanInteractionEnvelope {
+    mode: 'allow' | 'prompt' | 'read_only';
+    requiresConfirmation: boolean;
+    prompt: string;
+    decisions: HumanInteractionDecision[];
+    allowedActions: string[];
+    deniedActions: string[];
+}
+
 export interface DocumentIngestResult {
     status: string;
     recordId: string;
@@ -354,7 +372,7 @@ export class BackendClient {
     /**
      * Ask a natural-language question to the Planner agent.
      */
-    async askQuestion(question: string, sessionId?: string): Promise<{ summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }> } | null> {
+    async askQuestion(question: string, sessionId?: string): Promise<{ summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }>; interaction?: HumanInteractionEnvelope | null } | null> {
         try {
             let url = `${this.baseUrl}/api/v1/query`;
             if (sessionId) {
@@ -384,7 +402,7 @@ export class BackendClient {
                 } catch { /* not JSON */ }
                 return { summary: errorMsg, commands: [], _error: true } as any;
             }
-            return (await res.json()) as { summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }> };
+            return (await res.json()) as { summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }>; interaction?: HumanInteractionEnvelope | null };
         } catch (err: any) {
             this.output.appendLine(`[BackendClient] Network error querying backend: ${err.message || err}`);
             if (err.stack) {

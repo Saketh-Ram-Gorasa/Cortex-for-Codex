@@ -6,6 +6,7 @@
 .env.development.local
 .env.test.local
 .env.production.local
+*.db
 *.zip
 *.log
 
@@ -75,7 +76,13 @@ CODEBASE_ANALYSIS.md
 design.md
 backend_logs.txt
 /scripts/
-/mock/
+/mock/external/
 /test/
 /tests/
 Sourceoftruth.md
+README_OLD.md
+secondcortex-backend/auth.db
+/context/
+/logo kit/
+/steal/
+/mock/
