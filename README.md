@@ -163,9 +163,20 @@ SecondCortex is built as a distributed system with three main layers:
 
 ### Prerequisites
 - **Node.js** 18+ (for VS Code extension and web frontend)
-- **Python** 3.10+ (for backend)
+- **Python** 3.11-3.13 (for backend and CodexCortex local MCP work)
 - **Docker** & **Docker Compose** (recommended for backend)
 - **VS Code** 1.80+ (for extension)
+
+### Optional: CodexCortex Native MCP Setup
+
+This fork includes `CodexCortex/` as a plug-and-play in-repo package for Codex-native MCP access to SecondCortex memory.
+
+```powershell
+.\CodexCortex\scripts\setup_env.cmd
+.\CodexCortex\scripts\run_tests.cmd
+```
+
+The setup script rebuilds the repository `.venv` on Python 3.13, installs the backend requirements, installs `CodexCortex` in editable mode, and exposes the `codexcortex-mcp` console command for Codex MCP config. See [CodexCortex Native Setup](docs/codexcortex-native-setup.md) for teammate workflow and repo alignment details.
 
 ### Option 1: Docker Compose (Recommended)
 
@@ -496,6 +507,11 @@ See [MCP Integration Guide](docs/mcp-integration.md) for details.
 │   │   └── lib/                # Utilities, API clients
 │   └── package.json
 │
+├── CodexCortex/                # Codex-native MCP adapter package
+│   ├── codexcortex_mcp.py      # Thin Codex tool surface over SecondCortex memory
+│   ├── scripts/                # Local setup/test helpers
+│   └── tests/                  # Adapter contract tests
+│
 ├── docker-compose.yml           # Local orchestration
 └── docs/                        # Documentation
     ├── docker.md
@@ -559,6 +575,7 @@ npm test
 | Configuration Reference | [docs/configuration.md](docs/configuration.md) |
 | Security & Privacy | [docs/security.md](docs/security.md) |
 | MCP Integration | [docs/mcp-integration.md](docs/mcp-integration.md) |
+| CodexCortex Native Setup | [docs/codexcortex-native-setup.md](docs/codexcortex-native-setup.md) |
 | API Reference | [docs/api.md](docs/api.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
