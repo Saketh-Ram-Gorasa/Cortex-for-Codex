@@ -852,7 +852,7 @@ async def search_snapshots(
     projectId: str | None = None,
     principal: dict = Depends(get_current_principal),
 ):
-    """Semantic snapshot search using Azure AI Search with Chroma fallback."""
+    """Semantic snapshot search over locally indexed ChromaDB snapshots."""
     role = str(principal.get("role") or "user")
     if role == "pm_guest":
         _require_pm_guest_project_access(principal=principal, project_id=projectId)

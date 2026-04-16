@@ -1,20 +1,4 @@
-"""
-Vector Database Service — Azure-first architecture:
-
-PRIMARY (Production):
-  1. Azure AI Search - semantic vector search (main)
-  2. Azure CosmosDB - persistent document storage (main)
-
-FALLBACK (Local):
-  3. ChromaDB - in-memory vector cache (fallback only)
-
-Hierarchy:
-  - Search: Azure AI Search → ChromaDB fallback
-  - Storage: CosmosDB → ChromaDB fallback
-  - Embeddings: Azure OpenAI / GitHub Models with deterministic fallback
-
-Supports per-user namespaced collections for multi-tenant isolation.
-"""
+"""Vector Database Service using local ChromaDB as primary storage."""
 
 from __future__ import annotations
 
@@ -45,11 +29,6 @@ from config import settings
 from services.llm_client import task_embedding_create
 from services.external_ingest import ExternalMemoryRecord
 
-try:
-    from services.azure_search import AzureSearchService
-except Exception:
-    AzureSearchService = None
-
 logger = logging.getLogger("secondcortex.vectordb")
 
 
@@ -57,11 +36,11 @@ class VectorDBService:
     """Manages LLM embeddings and ChromaDB operations with per-user isolation."""
 
     def __init__(self) -> None:
-        # Initialize ChromaDB as local fallback cache
+        # Initialize ChromaDB as local primary store during this migration
         try:
             db_path = settings.chroma_db_path
             self.chroma_client = chromadb.PersistentClient(path=db_path)
-            logger.info("ChromaDB initialized at: %s (fallback cache)", db_path)
+            logger.info("ChromaDB initialized at: %s (primary local store)", db_path)
         except Exception as exc:
             logger.error("ChromaDB initialization failed: %s", exc)
             self.chroma_client = None
@@ -72,50 +51,7 @@ class VectorDBService:
         self._collection_aliases: dict[str, str] = {}
         self._failover_last_switch_at: dict[str, float] = {}
         self._failover_cooldown_seconds = 300
-        
-        # Initialize PRIMARY Azure services
-        self.azure_search = self._init_azure_search_service()
-        self.cosmosdb_client = self._init_cosmosdb_connection()
 
-    def _init_cosmosdb_connection(self):
-        """Initialize CosmosDB as PRIMARY persistent storage."""
-        try:
-            from azure.cosmos import CosmosClient
-        except ImportError:
-            logger.warning("azure-cosmos not installed. CosmosDB persistence disabled.")
-            return None
-
-        endpoint = str(settings.cosmosdb_endpoint or "").strip()
-        key = str(settings.cosmosdb_key or "").strip()
-
-        if not endpoint or not key:
-            logger.info("CosmosDB not configured. Using ChromaDB fallback for storage.")
-            return None
-
-        try:
-            client = CosmosClient(endpoint, credential=key)
-            database = client.get_database_client(settings.cosmosdb_database_name)
-            container = database.get_container_client(settings.cosmosdb_container_name)
-            logger.info("CosmosDB snapshot storage PRIMARY - endpoint: %s", endpoint)
-            return container
-        except Exception as exc:
-            logger.warning("CosmosDB connection failed. Falling back to ChromaDB storage: %s", exc)
-            return None
-
-    def _init_azure_search_service(self):
-        endpoint = str(settings.azure_search_endpoint or "").strip()
-        api_key = str(settings.azure_search_api_key or "").strip()
-        index_name = str(settings.azure_search_index_name or "snapshots").strip() or "snapshots"
-
-        if not endpoint or not api_key or AzureSearchService is None:
-            return None
-
-        try:
-            logger.info("Azure AI Search vector retrieval enabled for index '%s'.", index_name)
-            return AzureSearchService(endpoint=endpoint, api_key=api_key, index_name=index_name)
-        except Exception as exc:
-            logger.warning("Azure AI Search initialization failed. Falling back to Chroma search: %s", exc)
-            return None
 
     def _to_uuid(self, value: Any) -> uuid.UUID | None:
         try:
@@ -155,6 +91,7 @@ class VectorDBService:
         except Exception as exc:
             logger.error("CosmosDB snapshot upsert failed for snapshot=%s: %s", getattr(snapshot, "id", "unknown"), exc)
             return False
+
 
     def _collection_user_key(self, user_id: str | None) -> str:
         return user_id or "__default__"
@@ -460,10 +397,11 @@ class VectorDBService:
     # ── Vector DB Operations ────────────────────────────────────
 
     async def upsert_snapshot(self, snapshot: Any, user_id: str | None = None) -> None:
-        """Store snapshot - PRIMARY: CosmosDB + Azure AI Search, FALLBACK: ChromaDB"""
+        """Store snapshot in local ChromaDB with OpenAI-backed embedding generation."""
         collection = self._get_collection(user_id)
         if collection is None:
-            logger.warning("Chroma collection not available — continuing with other storage backends.")
+            logger.warning("Chroma collection not available. Snapshot persistence skipped.")
+            return
 
         metadata = {
             "id": str(snapshot.id),
@@ -483,96 +421,62 @@ class VectorDBService:
             "function_signatures": json.dumps((snapshot.function_context or {}).get("signatures") or []),
         }
 
-        embedding = snapshot.embedding or []
+        embedding = list(snapshot.embedding or [])
+        embedding_source = (
+            f"{metadata.get('active_file', '')}\n"
+            f"{metadata.get('summary', '')}\n"
+            f"{metadata.get('shadow_graph', '')}\n"
+            f"{metadata.get('active_symbol', '')}\n"
+            f"{metadata.get('function_signatures', '')}"
+        )
         if not embedding:
-            dimension = self._infer_collection_dimension(collection) if collection is not None else 1536
-            embedding_source = (
-                f"{metadata.get('active_file', '')}\n"
-                f"{metadata.get('summary', '')}\n"
-                f"{metadata.get('shadow_graph', '')}\n"
-                f"{metadata.get('active_symbol', '')}\n"
-                f"{metadata.get('function_signatures', '')}"
-            )
-            embedding = self._build_fallback_embedding(embedding_source, dimension)
+            embedding = await self.generate_embedding(embedding_source)
+            if not embedding:
+                dimension = self._infer_collection_dimension(collection)
+                embedding = self._build_fallback_embedding(embedding_source, dimension)
+                logger.warning(
+                    "Snapshot %s missing usable embedding; using deterministic fallback vector (dim=%d).",
+                    snapshot.id,
+                    len(embedding),
+                )
+        elif len(embedding) not in (384, 1536, 3072):
             logger.warning(
-                "Snapshot %s missing external embedding; using deterministic fallback vector (dim=%d).",
+                "Snapshot %s provided embedding dimension=%d. Regenerating with OpenAI fallback.",
                 snapshot.id,
                 len(embedding),
             )
-        else:
-            # Validate embedding dimension
-            valid_dimensions = [1536, 384]  # ada-002 is 1536, text-embedding-3-small is 384
-            if len(embedding) not in valid_dimensions:
-                logger.error(
-                    "Snapshot %s has invalid embedding dimension %d (expected one of %s). "
-                    "This may cause Azure Search indexing to fail.",
-                    snapshot.id,
-                    len(embedding),
-                    valid_dimensions,
-                )
+            regenerated = await self.generate_embedding(embedding_source)
+            if regenerated:
+                embedding = regenerated
 
-        if collection is not None:
-            try:
-                collection.upsert(
-                    ids=[str(snapshot.id)],
-                    embeddings=[embedding],
-                    metadatas=[metadata],
-                    documents=[str(snapshot.shadow_graph or "")],
-                )
-                logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
-            except Exception as exc:
-                if self._with_compactor_recovery(user_id, exc):
-                    collection = self._get_collection(user_id)
-                    if collection is not None:
-                        try:
-                            collection.upsert(
-                                ids=[str(snapshot.id)],
-                                embeddings=[embedding],
-                                metadatas=[metadata],
-                                documents=[str(snapshot.shadow_graph or "")],
-                            )
-                            logger.info(
-                                "Upserted snapshot %s to failover collection for user=%s.",
-                                snapshot.id,
-                                user_id or "default",
-                            )
-                        except Exception as retry_exc:
-                            logger.error("Retry upsert to failover collection failed: %s", retry_exc)
-                else:
-                    logger.error("Upsert to ChromaDB failed: %s", exc)
-
-        # 1. Store in CosmosDB PRIMARY
-        await self._store_snapshot_cosmosdb(snapshot, user_id, metadata, embedding)
-
-        # 2. Index in Azure AI Search PRIMARY
-        if self.azure_search is not None and user_id:
-            try:
-                indexing_success = await self.azure_search.index_snapshot(
-                    {
-                        "id": str(snapshot.id),
-                        "summary": metadata.get("summary", ""),
-                        "active_file": metadata.get("active_file", ""),
-                        "git_branch": metadata.get("git_branch", ""),
-                        "project_id": metadata.get("project_id", ""),
-                        "user_id": str(user_id),
-                        "timestamp": metadata.get("timestamp", ""),
-                        "entities": metadata.get("entities", ""),
-                        "embedding": embedding,
-                    }
-                )
-                if indexing_success:
-                    logger.info("Snapshot %s successfully indexed in Azure AI Search (PRIMARY)", snapshot.id)
-                else:
-                    logger.warning(
-                        "Snapshot %s failed to index in Azure AI Search after retries; data in CosmosDB",
-                        snapshot.id
-                    )
-            except Exception as azure_exc:
-                logger.error(
-                    "Unexpected error syncing snapshot %s to Azure Search: %s. Data available in ChromaDB fallback.",
-                    snapshot.id,
-                    azure_exc,
-                )
+        try:
+            collection.upsert(
+                ids=[str(snapshot.id)],
+                embeddings=[embedding],
+                metadatas=[metadata],
+                documents=[str(snapshot.shadow_graph or "")],
+            )
+            logger.info("Upserted snapshot %s to collection for user=%s.", snapshot.id, user_id or "default")
+        except Exception as exc:
+            if self._with_compactor_recovery(user_id, exc):
+                collection = self._get_collection(user_id)
+                if collection is not None:
+                    try:
+                        collection.upsert(
+                            ids=[str(snapshot.id)],
+                            embeddings=[embedding],
+                            metadatas=[metadata],
+                            documents=[str(snapshot.shadow_graph or "")],
+                        )
+                        logger.info(
+                            "Upserted snapshot %s to failover collection for user=%s.",
+                            snapshot.id,
+                            user_id or "default",
+                        )
+                    except Exception as retry_exc:
+                        logger.error("Retry upsert to failover collection failed: %s", retry_exc)
+            else:
+                logger.error("Upsert to ChromaDB failed: %s", exc)
 
         self._clear_user_cache(user_id)
 
@@ -583,13 +487,7 @@ class VectorDBService:
         user_id: str | None = None,
         project_id: str | None = None,
     ) -> list[dict]:
-        """Perform a vector semantic search over stored snapshots, scoped to the user.
-        
-        Search strategy:
-        1. Try Azure AI Search (primary) with retry logic
-        2. Fall back to ChromaDB (local vector DB)
-        3. Fall back to recent snapshots if embedding fails
-        """
+        """Perform a semantic search over local ChromaDB snapshots."""
         cache_key = self._cache_key("semantic", user_id, project_id, query, top_k)
         cached = self._cache_get(cache_key)
         if cached is not None:
@@ -606,34 +504,7 @@ class VectorDBService:
                 self._cache_set(cache_key, fallback)
                 return fallback
 
-            # Strategy 1: Try Azure AI Search (primary)
-            if self.azure_search is not None and user_id:
-                try:
-                    logger.debug("Attempting Azure AI Search for user=%s", user_id)
-                    azure_results = await self.azure_search.vector_search(
-                        query_vector=query_embedding,
-                        user_id=str(user_id),
-                        project_id=project_id,
-                        k=top_k,
-                    )
-                    if azure_results:
-                        logger.info(
-                            "Azure AI Search returned %d results for user=%s",
-                            len(azure_results),
-                            user_id,
-                        )
-                        self._cache_set(cache_key, azure_results)
-                        return azure_results
-                    else:
-                        logger.debug("Azure AI Search returned empty results, falling back to ChromaDB")
-                except Exception as azure_exc:
-                    logger.warning(
-                        "Azure AI Search failed: %s. Falling back to ChromaDB for user=%s",
-                        azure_exc,
-                        user_id,
-                    )
-
-            # Strategy 2: Fall back to ChromaDB
+            # Strategy 1: ChromaDB vector search
             collection = self._get_collection(user_id)
             if collection is None:
                 logger.warning("Chroma collection not available for user=%s — returning recent snapshots fallback.", user_id)
@@ -660,7 +531,7 @@ class VectorDBService:
                     self._cache_set(cache_key, items)
                     return items
 
-            # Strategy 3: Fall back to recent snapshots
+            # Strategy 2: Fall back to recent snapshots
             logger.debug("ChromaDB returned no results, falling back to recent snapshots for user=%s", user_id)
             fallback = await self.get_recent_snapshots(limit=top_k, user_id=user_id, project_id=project_id)
             self._cache_set(cache_key, fallback)
@@ -856,31 +727,7 @@ class VectorDBService:
         if cached is not None:
             return cached
 
-        # PRIMARY: Azure AI Search direct recency retrieval
-        if self.azure_search is not None and user_id:
-            try:
-                azure_timeline = await self.azure_search.recent_snapshots(
-                    user_id=str(user_id),
-                    project_id=project_id,
-                    limit=limit,
-                )
-                if azure_timeline:
-                    logger.info(
-                        "Azure AI Search returned %d timeline items for user=%s",
-                        len(azure_timeline),
-                        user_id,
-                    )
-                    self._cache_set(cache_key, azure_timeline)
-                    return azure_timeline
-                logger.debug("Azure AI Search returned empty timeline; falling back to ChromaDB")
-            except Exception as azure_exc:
-                logger.warning(
-                    "Azure timeline retrieval failed: %s. Falling back to ChromaDB for user=%s",
-                    azure_exc,
-                    user_id,
-                )
-
-        # FALLBACK: Chroma timeline retrieval
+        # Chroma timeline retrieval
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — returning empty timeline.")
@@ -899,7 +746,7 @@ class VectorDBService:
                             return results
                         attempted_recovery = True
                     return []
-                
+
                 # Fetch only what we need + some buffer for sorting
                 fetch_limit = min(total, max(limit * 3, 500))
                 get_kwargs: dict[str, Any] = {
@@ -934,7 +781,7 @@ class VectorDBService:
                         return []
                     attempted_recovery = True
                     continue
-                
+
                 # If primary recovery didn't help, try recovery collections
                 if user_id and not attempted_recovery:
                     try:
@@ -944,7 +791,7 @@ class VectorDBService:
                             return results
                     except Exception as recovery_exc:
                         logger.debug("Recovery collection scan failed: %s", recovery_exc)
-                
+
                 logger.error("get_snapshot_timeline failed: %s", exc)
                 return []
 
@@ -1126,3 +973,4 @@ class VectorDBService:
         except Exception as exc:
             logger.error("get_fact_by_id failed for %s: %s", fact_id, exc)
             return None
+
