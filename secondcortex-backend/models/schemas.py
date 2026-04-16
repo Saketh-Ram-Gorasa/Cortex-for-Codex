@@ -23,6 +23,8 @@ class SnapshotPayload(BaseModel):
     git_branch: str | None = Field(None, alias="gitBranch")
     project_id: str | None = Field(None, alias="projectId")
     terminal_commands: list[str] = Field(default_factory=list, alias="terminalCommands")
+    capture_level: Literal["base", "medium", "full", "ultra"] = Field("medium", alias="captureLevel")
+    capture_meta: dict[str, Any] = Field(default_factory=dict, alias="captureMeta")
     function_context: dict[str, Any] | None = Field(None, alias="functionContext")
 
     model_config = {"populate_by_name": True}
@@ -383,6 +385,8 @@ class StoredSnapshot(BaseModel):
     git_branch: str | None = None
     project_id: str | None = None
     terminal_commands: list[str] = Field(default_factory=list)
+    capture_level: Literal["base", "medium", "full", "ultra"] = "medium"
+    capture_meta: dict[str, Any] = Field(default_factory=dict)
     function_context: dict[str, Any] | None = None
     metadata: MemoryMetadata | None = None
     embedding: list[float] | None = None

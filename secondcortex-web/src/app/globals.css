@@ -1995,7 +1995,7 @@ footer {
   align-items: stretch;
   justify-content: space-between;
   gap: 0;
-  border-radius: 12px;
+  border-radius: 0;
   overflow: hidden;
   transition: border-color 0.2s, background 0.2s;
 }
@@ -2043,7 +2043,7 @@ footer {
   justify-content: center;
   gap: 2px;
   padding: 6px 4px;
-  border-radius: 8px;
+  border-radius: 0;
   line-height: 1;
 }
 
@@ -2083,7 +2083,7 @@ footer {
   border: 1px solid var(--border);
   background: rgba(8, 8, 8, 0.68);
   padding: 14px;
-  border-radius: 12px;
+  border-radius: 0;
 }
 
 .pm-summary-head {
@@ -2130,7 +2130,7 @@ footer {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
   padding: 12px;
-  border-radius: 10px;
+  border-radius: 0;
 }
 
 .pm-history-head {
@@ -2191,7 +2191,7 @@ footer {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 2px 8px;
   font-family: var(--font-mono);
   font-size: 10px;
@@ -2241,7 +2241,7 @@ footer {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 7px 11px;
-  border-radius: 999px;
+  border-radius: 0;
 }
 
 .pm-timeline-toggle.active {
@@ -2266,7 +2266,7 @@ footer {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 8px 10px;
-  border-radius: 999px;
+  border-radius: 0;
 }
 
 .pm-chat-log {
@@ -2280,7 +2280,7 @@ footer {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-radius: 12px;
+  border-radius: 0;
 }
 
 .pm-chat-msg {
@@ -2289,7 +2289,7 @@ footer {
   white-space: pre-line;
   border: 1px solid var(--border);
   padding: 10px;
-  border-radius: 10px;
+  border-radius: 0;
 }
 
 .pm-chat-msg.user {
@@ -2306,7 +2306,7 @@ footer {
   margin-top: 12px;
   display: flex;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 0;
   overflow: hidden;
 }
 

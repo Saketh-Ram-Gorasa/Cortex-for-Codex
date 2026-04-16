@@ -109,6 +109,7 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
   const [projectSnapshotError, setProjectSnapshotError] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
+  const [hasLoadedDashboard, setHasLoadedDashboard] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatPending, setChatPending] = useState(false);
 
@@ -151,7 +152,7 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
     };
 
     const loadData = async (background: boolean) => {
-      if (!background) {
+      if (!background && !hasLoadedDashboard) {
         setLoading(true);
         setError(null);
       }
@@ -226,7 +227,9 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
                   ? errBody.detail
                   : `HTTP ${snapshotsRes.status} while fetching project timeline`;
               setProjectSnapshotError(errDetail);
-              setProjectSnapshots([]);
+              if (!background) {
+                setProjectSnapshots([]);
+              }
             } else {
               const timelineData = (await snapshotsRes.json()) as { timeline: ProjectSnapshot[] };
               setProjectSnapshots(timelineData.timeline || []);
@@ -235,7 +238,9 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Snapshot fetch failed';
             setProjectSnapshotError(msg);
-            setProjectSnapshots([]);
+            if (!background) {
+              setProjectSnapshots([]);
+            }
           }
 
           try {
@@ -250,14 +255,16 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
               if (evolutionRes.ok) {
                 const evolutionData = (await evolutionRes.json()) as EvolutionResponse;
                 setEvolutionEntries(Array.isArray(evolutionData.entries) ? evolutionData.entries : []);
-              } else {
+              } else if (!background) {
                 setEvolutionEntries([]);
               }
-            } else {
+            } else if (!background) {
               setEvolutionEntries([]);
             }
           } catch {
-            setEvolutionEntries([]);
+            if (!background) {
+              setEvolutionEntries([]);
+            }
           }
         } else {
           setProjectSnapshots([]);
@@ -265,6 +272,9 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
         }
 
         if (!cancelled) {
+          if (!hasLoadedDashboard) {
+            setHasLoadedDashboard(true);
+          }
           setLoading(false);
         }
       } catch (err) {
@@ -294,7 +304,7 @@ export default function TeamCortexDashboard({ token, isGuestPm, backendUrl }: Te
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [apiBase, token, selectedProjectId, timelineMode]);
+  }, [apiBase, token, selectedProjectId, timelineMode, hasLoadedDashboard]);
 
   const sendQuestion = async (input: string) => {
     const trimmed = input.trim();

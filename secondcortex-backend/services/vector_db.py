@@ -59,6 +59,40 @@ class VectorDBService:
         except Exception:
             return None
 
+    async def _store_snapshot_cosmosdb(self, snapshot: Any, user_id: str | None, metadata: dict[str, Any], embedding: list[float]) -> bool:
+        """Store snapshot in CosmosDB as PRIMARY persistent storage."""
+        if self.cosmosdb_client is None:
+            return False
+
+        try:
+            # Create CosmosDB document
+            doc = {
+                "id": str(snapshot.id),
+                "user_id": str(user_id or ""),
+                "project_id": str(snapshot.project_id or ""),
+                "active_file": str(snapshot.active_file or ""),
+                "language_id": str(snapshot.language_id or ""),
+                "git_branch": str(snapshot.git_branch or ""),
+                "timestamp": snapshot.timestamp.isoformat() if hasattr(snapshot.timestamp, "isoformat") else str(snapshot.timestamp),
+                "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
+                "capture_level": str(getattr(snapshot, "capture_level", "medium") or "medium"),
+                "capture_meta": getattr(snapshot, "capture_meta", {}) or {},
+                "summary": str(metadata.get("summary") or ""),
+                "entities": metadata.get("entities", ""),
+                "embedding": embedding,
+                "sync_status": "SYNCED",
+                "_partition": str(user_id or "default"),
+            }
+            
+            # Upsert into CosmosDB
+            self.cosmosdb_client.upsert_item(doc)
+            logger.info("Snapshot %s successfully stored in CosmosDB (PRIMARY)", snapshot.id)
+            return True
+        except Exception as exc:
+            logger.error("CosmosDB snapshot upsert failed for snapshot=%s: %s", getattr(snapshot, "id", "unknown"), exc)
+            return False
+
+
     def _collection_user_key(self, user_id: str | None) -> str:
         return user_id or "__default__"
 
@@ -379,6 +413,8 @@ class VectorDBService:
             "git_branch": str(snapshot.git_branch or ""),
             "project_id": str(snapshot.project_id or ""),
             "terminal_commands": json.dumps(snapshot.terminal_commands or []),
+            "capture_level": str(getattr(snapshot, "capture_level", "medium") or "medium"),
+            "capture_meta": json.dumps(getattr(snapshot, "capture_meta", {}) or {}),
             "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
             "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
             "active_symbol": str((snapshot.function_context or {}).get("activeSymbol") or ""),

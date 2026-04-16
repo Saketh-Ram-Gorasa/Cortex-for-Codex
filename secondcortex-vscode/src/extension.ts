@@ -18,6 +18,31 @@ let eventCapture: EventCapture | undefined;
 let snapshotCache: SnapshotCache | undefined;
 
 const PROJECT_SELECTION_STATE_KEY = 'secondcortex.projects.byWorkspace';
+const CAPTURE_LEVELS = ['base', 'medium', 'full', 'ultra'] as const;
+type CaptureLevel = typeof CAPTURE_LEVELS[number];
+
+function normalizeCaptureLevel(value: string | undefined): CaptureLevel {
+    const lowered = String(value || '').trim().toLowerCase();
+    if (lowered === 'base' || lowered === 'medium' || lowered === 'full' || lowered === 'ultra') {
+        return lowered;
+    }
+    return 'medium';
+}
+
+function toCaptureLevelLabel(level: CaptureLevel): string {
+    switch (level) {
+        case 'base':
+            return 'Base';
+        case 'medium':
+            return 'Medium';
+        case 'full':
+            return 'Full';
+        case 'ultra':
+            return 'Ultra';
+        default:
+            return 'Medium';
+    }
+}
 
 interface GitIngestCommandRequest {
     repoPath: string;
@@ -188,11 +213,13 @@ export function activate(context: vscode.ExtensionContext) {
     );
     const debouncerDelayMs = config.get<number>('debouncerDelayMs', 30000);
     const noiseThresholdMs = config.get<number>('noiseThresholdMs', 10000);
+    const captureLevel = normalizeCaptureLevel(config.get<string>('captureLevel', 'medium'));
     outputChannel.appendLine(`[SecondCortex] Using backend URL: ${backendUrl}`);
     outputChannel.appendLine(`[SecondCortex] Using frontend URL: ${frontendUrl}`);
     if (DEMO_MODE) {
         outputChannel.appendLine('[SecondCortex] Local deterministic mode active - backend and network actions are bypassed.');
     }
+    outputChannel.appendLine(`[SecondCortex] Snapshot capture level: ${captureLevel}`);
 
     // Auth
     const authService = new AuthService(context.secrets, outputChannel, backendUrl);
@@ -609,6 +636,42 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             await selectProjectInteractive();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('secondcortex.setCaptureLevel', async () => {
+            const workspaceFolder = getWorkspaceFolder();
+            if (!workspaceFolder) {
+                vscode.window.showWarningMessage('Open a workspace folder to set a workspace capture level.');
+                return;
+            }
+
+            const current = normalizeCaptureLevel(vscode.workspace.getConfiguration('secondcortex').get<string>('captureLevel', 'medium'));
+            const pick = await vscode.window.showQuickPick(
+                [
+                    { label: 'Base', level: 'base', description: 'Metadata only, minimal capture.' },
+                    { label: 'Medium', level: 'medium', description: 'Intent signals (comments, signatures, summaries).' },
+                    { label: 'Full', level: 'full', description: 'Full sanitized active file content.' },
+                    { label: 'Ultra', level: 'ultra', description: 'Full active file plus bounded extra open-file context.' },
+                ],
+                {
+                    placeHolder: `Current level: ${toCaptureLevelLabel(current)}`,
+                }
+            );
+
+            if (!pick) {
+                return;
+            }
+
+            const selected = normalizeCaptureLevel(pick.level);
+            await vscode.workspace.getConfiguration('secondcortex').update(
+                'captureLevel',
+                selected,
+                vscode.ConfigurationTarget.Workspace,
+            );
+            vscode.window.showInformationMessage(`SecondCortex capture level set to ${toCaptureLevelLabel(selected)} for this workspace.`);
+            outputChannel.appendLine(`[SecondCortex] Capture level updated to ${selected} (workspace scope).`);
         })
     );
 

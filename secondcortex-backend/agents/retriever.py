@@ -136,6 +136,8 @@ class RetrieverAgent:
             git_branch=payload.git_branch,
             project_id=payload.project_id,
             terminal_commands=payload.terminal_commands,
+            capture_level=payload.capture_level,
+            capture_meta=payload.capture_meta,
             function_context=payload.function_context,
             metadata=metadata,
         )

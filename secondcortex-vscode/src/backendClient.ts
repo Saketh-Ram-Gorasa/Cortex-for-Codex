@@ -235,6 +235,17 @@ export class BackendClient {
             gitBranch: null,
             projectId: projectId || null,
             terminalCommands: [],
+            captureLevel: 'medium',
+            captureMeta: {
+                source: 'manual_note',
+                includedArtifacts: {
+                    metadata: true,
+                    comments: false,
+                    functionSignatures: false,
+                    activeFileContent: true,
+                    openFileContext: false,
+                },
+            },
             functionContext: {
                 source: 'manual_note',
                 noteEntities,
@@ -616,6 +627,8 @@ export class BackendClient {
         shadow_graph: string;
         active_symbol?: string;
         function_signatures?: string[];
+        capture_level?: 'base' | 'medium' | 'full' | 'ultra';
+        capture_meta?: Record<string, unknown>;
     } | null> {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/snapshots/${encodeURIComponent(snapshotId)}`, {

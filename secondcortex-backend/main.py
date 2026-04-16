@@ -191,6 +191,19 @@ def _parse_snapshot_terminal_commands(value: Any) -> list[str]:
     return []
 
 
+def _parse_snapshot_capture_meta(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
 def _normalize_code_path(value: str | None) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -918,6 +931,8 @@ async def get_snapshot_by_id(
             "entities": snapshot.get("entities", "").split(",") if snapshot.get("entities") else [],
             "active_symbol": snapshot.get("active_symbol"),
             "function_signatures": _parse_snapshot_entities(snapshot.get("function_signatures")),
+            "capture_level": snapshot.get("capture_level") or "medium",
+            "capture_meta": _parse_snapshot_capture_meta(snapshot.get("capture_meta")),
             "shadow_graph": snapshot.get("document") or snapshot.get("shadow_graph") or "",
         }
     }

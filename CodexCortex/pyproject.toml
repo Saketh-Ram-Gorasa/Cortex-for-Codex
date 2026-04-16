@@ -1,0 +1,37 @@
+[project]
+name = "codexcortex"
+version = "0.1.0"
+description = "Thin Codex MCP adapter for SecondCortex memory"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "anyio>=4.0.0",
+    "chromadb>=0.4.20",
+    "mcp>=1.2.0",
+    "openai>=1.12.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.scripts]
+codexcortex-mcp = "codexcortex_mcp:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["codexcortex_mcp"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
