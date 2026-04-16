@@ -77,6 +77,11 @@ from services.git_ingest import RetroGitIngestionService
 from services.external_ingest import ExternalIngestionService
 from services.azure_document_intelligence import AzureDocumentIntelligenceService
 from services.incident_archaeology import IncidentArchaeologyService
+from services.human_interaction_harness import (
+    apply_human_interaction_harness,
+    normalize_interaction_mode,
+    parse_deny_patterns,
+)
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -184,6 +189,19 @@ def _parse_snapshot_terminal_commands(value: Any) -> list[str]:
         except Exception:
             return []
     return []
+
+
+def _parse_snapshot_capture_meta(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
 
 
 def _normalize_code_path(value: str | None) -> str:
@@ -834,7 +852,7 @@ async def search_snapshots(
     projectId: str | None = None,
     principal: dict = Depends(get_current_principal),
 ):
-    """Semantic snapshot search using Azure AI Search with Chroma fallback."""
+    """Semantic snapshot search over locally indexed ChromaDB snapshots."""
     role = str(principal.get("role") or "user")
     if role == "pm_guest":
         _require_pm_guest_project_access(principal=principal, project_id=projectId)
@@ -913,6 +931,8 @@ async def get_snapshot_by_id(
             "entities": snapshot.get("entities", "").split(",") if snapshot.get("entities") else [],
             "active_symbol": snapshot.get("active_symbol"),
             "function_signatures": _parse_snapshot_entities(snapshot.get("function_signatures")),
+            "capture_level": snapshot.get("capture_level") or "medium",
+            "capture_meta": _parse_snapshot_capture_meta(snapshot.get("capture_meta")),
             "shadow_graph": snapshot.get("document") or snapshot.get("shadow_graph") or "",
         }
     }
@@ -971,11 +991,11 @@ async def handle_query(
     try:
         logger.info("Query received: %s (user=%s, session=%s)", req.question, user_id, session_id)
 
-        # Step 1: Plan - break the question into search tasks
-        plan_result = await planner.plan(req.question, user_id=user_id)
-
-        # Step 2: Dual retrieval (facts + snapshots)
-        facts = await vector_db.recall_facts(req.question, top_k=5, user_id=user_id, min_salience=0.3)
+        # Step 1-2: Plan and fact recall in parallel; they are independent reads.
+        plan_result, facts = await asyncio.gather(
+            planner.plan(req.question, user_id=user_id),
+            vector_db.recall_facts(req.question, top_k=5, user_id=user_id, min_salience=0.3),
+        )
         retrieved_facts = [{"id": f.get("id"), "content": f.get("document"), "kind": f.get("kind"), "salience": f.get("salience")} for f in facts]
         retrieved_snapshots = [{"id": item.get("id"), "timestamp": item.get("timestamp"), "file": item.get("activeFile"), "branch": item.get("gitBranch")} for item in plan_result.retrieved_context[:5]]
 
@@ -997,6 +1017,17 @@ async def handle_query(
                     }
                 )
             response.sources = source_candidates
+
+        interaction_mode = normalize_interaction_mode(settings.human_interaction_mode)
+        safe_commands, interaction = apply_human_interaction_harness(
+            list(response.commands or []),
+            mode=interaction_mode,
+            deny_patterns=parse_deny_patterns(settings.human_interaction_deny_patterns),
+            max_actions=settings.human_interaction_max_actions,
+            context_label="query",
+        )
+        response.commands = safe_commands
+        response.interaction = interaction
 
         # Step 4: Enrich response with retrieved facts and snapshots
         response.retrieved_facts = retrieved_facts
@@ -1180,10 +1211,20 @@ async def handle_resurrection(
         current_workspace=request.current_workspace,
     )
 
+    interaction_mode = normalize_interaction_mode(settings.human_interaction_mode)
+    safe_commands, interaction = apply_human_interaction_harness(
+        list(commands or []),
+        mode=interaction_mode,
+        deny_patterns=parse_deny_patterns(settings.human_interaction_deny_patterns),
+        max_actions=settings.human_interaction_max_actions,
+        context_label="resurrection",
+    )
+
     return ResurrectionResponse(
-        commands=commands,
+        commands=safe_commands,
         impact_analysis=impact,
         planSummary=plan_summary,
+        interaction=interaction,
     )
 
 

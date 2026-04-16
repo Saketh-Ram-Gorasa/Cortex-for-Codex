@@ -1,0 +1,23 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="200" height="200" fill="white"/>
+<path d="M109 83.5C109 97.031 98.031 108 84.5 108C70.969 108 60 97.031 60 83.5C60 69.969 70.969 59 84.5 59C98.031 59 109 69.969 109 83.5Z" fill="black"/>
+<circle cx="117.5" cy="83.5" r="24.5" fill="black"/>
+<circle cx="118" cy="83" r="18" fill="white"/>
+<circle cx="85" cy="84" r="18" fill="white"/>
+<circle cx="115.5" cy="114.5" r="24.5" fill="black"/>
+<path d="M133 114C133 123.941 124.941 132 115 132C105.059 132 97 123.941 97 114C97 104.059 105.059 96 115 96C124.941 96 133 104.059 133 114Z" fill="white"/>
+<path d="M110 114.5C110 128.031 99.031 139 85.5 139C71.969 139 61 128.031 61 114.5C61 100.969 71.969 90 85.5 90C99.031 90 110 100.969 110 114.5Z" fill="black"/>
+<circle cx="87" cy="114" r="18" fill="white"/>
+<rect x="66" y="99.6482" width="49" height="49" transform="rotate(-45 66 99.6482)" fill="black"/>
+<rect x="75" y="99.4558" width="36" height="36" transform="rotate(-45 75 99.4558)" fill="white"/>
+<rect x="84" y="100.263" width="23" height="23" transform="rotate(-45 84 100.263)" fill="black"/>
+<path d="M93 100.071L100.071 93L107.142 100.071L100.071 107.142L93 100.071Z" fill="white"/>
+<rect x="101" y="65.0232" width="1.5" height="6.90743" transform="rotate(-43.0088 101 65.0232)" fill="white"/>
+<rect x="129.971" y="93.6797" width="1.5" height="7.9142" transform="rotate(48.9776 129.971 93.6797)" fill="white"/>
+<rect x="131" y="94.0274" width="0.834033" height="7.9142" transform="rotate(49.5535 131 94.0274)" fill="white"/>
+<rect x="136.251" y="100" width="1.04574" height="8.03929" transform="rotate(49.4801 136.251 100)" fill="white"/>
+<rect x="136.427" y="99.3699" width="1.01336" height="8.03929" transform="rotate(49.4801 136.427 99.3699)" fill="white"/>
+<rect x="94" y="70.1057" width="1.5" height="8.01246" transform="rotate(-47.4899 94 70.1057)" fill="white"/>
+<rect x="65.4222" y="100.099" width="1.5" height="8.82653" transform="rotate(-132.811 65.4222 100.099)" fill="white"/>
+<rect x="94" y="129.075" width="1.19323" height="8.82653" transform="rotate(-45.7741 94 129.075)" fill="white"/>
+</svg>

@@ -20,7 +20,8 @@ export default function LandingPage() {
   const mainNavLinks = [
     { label: "Live Graph", href: "/live" },
     { label: "Team Cortex", href: "/?pm=true" },
-    { label: "Testing", href: "/testing" },
+    { label: "Thesis", href: "/thesis" },
+    { label: "Offline Setup", href: "/offline-setup" },
     { label: "Architecture", href: "#arch" },
   ];
   const quickAccessFeatures = [
@@ -40,9 +41,9 @@ export default function LandingPage() {
       href: "#decision-archaeology",
     },
     {
-      title: "Testing Playground",
-      description: "Access the internal testing routes and validation screens.",
-      href: "/testing",
+      title: "SecondCortex Thesis",
+      description: "Read the core thesis and product principles behind SecondCortex.",
+      href: "/thesis",
     },
     {
       title: "Install Extension",
@@ -86,6 +87,17 @@ export default function LandingPage() {
   const handlePmGuestLogin = async () => {
     setIsPmSubmitting(true);
     setPmError("");
+
+    // In local/demo workflows, bypass backend guest auth so mock Team Cortex always opens.
+    if (typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+      localStorage.setItem("sc_pm_mode", "auth");
+      localStorage.setItem("sc_pm_guest_mode", "true");
+      router.push("/live?pm=true&guest=true");
+      setShowPmModal(false);
+      setIsPmSubmitting(false);
+      return;
+    }
+
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 45000);
     try {
@@ -361,6 +373,9 @@ export default function LandingPage() {
           >
             Team Cortex
           </button>
+          <a className="nav-login" href="/thesis">
+            Thesis
+          </a>
           <a className="nav-login" href="/login">
             Login
           </a>
@@ -997,6 +1012,7 @@ export default function LandingPage() {
             <a href="/login">Login</a>
             <a href="/signup">Sign Up</a>
             <a href="/live">Live Graph</a>
+            <a href="/thesis">Thesis</a>
             <button
               type="button"
               className="footer-link-button"
@@ -1007,7 +1023,7 @@ export default function LandingPage() {
             >
               Team Cortex
             </button>
-            <a href="/testing">Testing</a>
+            <a href="/offline-setup">Offline Setup</a>
           </div>
         </div>
 
@@ -1017,8 +1033,12 @@ export default function LandingPage() {
             <a href={githubRepoUrl} target="_blank" rel="noreferrer">GitHub</a>
             <a href={extensionMarketplaceUrl} target="_blank" rel="noreferrer">VS Code Marketplace</a>
             <a href={docsUrl} target="_blank" rel="noreferrer">Documentation</a>
+            <a href="/thesis">Thesis</a>
+            <a href="/offline-setup">Offline Setup</a>
             <a href="#arch">Architecture</a>
             <a href="#mcp">MCP Integration Guide</a>
+            <a href="https://docs.trychroma.com/" target="_blank" rel="noreferrer">ChromaDB Docs</a>
+            <a href="https://ollama.com/" target="_blank" rel="noreferrer">Ollama</a>
           </div>
         </div>
 

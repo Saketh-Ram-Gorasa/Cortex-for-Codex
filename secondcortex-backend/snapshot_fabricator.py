@@ -25,7 +25,7 @@ class SnapshotFabricator:
         "Fixed embedding generation timeout in vector_db service",
         "Added project-scoped snapshot queries for users",
         "Implemented fallback collection migration during Chroma failures",
-        "Enhanced rate limiting for Azure OpenAI API calls",
+        "Enhanced rate limiting for OpenAI API calls",
         "Created PostgreSQL schema for snapshot persistence",
         "Deployed multi-level recovery mechanism for vector DB",
         "Optimized snapshot ingestion pipeline with queue storage",

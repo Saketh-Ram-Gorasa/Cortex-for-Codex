@@ -1,306 +1,616 @@
-# SecondCortex
+<div align="center">
+<img src="logo%20kit/Group%202.png" alt="SecondCortex" width="512">
 
-SecondCortex is an AI-powered developer memory system that captures coding context, protects sensitive data locally, and helps you resume complex work quickly.
+<h1>SecondCortex: AI-Powered Developer Memory System</h1>
 
-It consists of:
-- A VS Code extension for capture, chat, and workspace resurrection.
-- A FastAPI backend with multi-agent orchestration.
-- A Model Context Protocol (MCP) server that exposes Cortex Memory as a service.
-- A Next.js frontend for graph and dashboard experiences.
+<h3>Capture Context · Resurrect Workspaces · Remember Everything</h3>
 
-## Why SecondCortex
+<p>
+    <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript">
+    <img src="https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/Next.js-000000?style=flat&logo=next.js&logoColor=white" alt="Next.js">
+    <img src="https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white" alt="FastAPI">
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+    <br>
+    <a href="https://github.com/SuhaanSyed/SecondCortex"><img src="https://img.shields.io/badge/GitHub-Repository-black?style=flat&logo=github&logoColor=white" alt="GitHub"></a>
+    <a href="https://marketplace.visualstudio.com/items?itemName=cortex-team.secondcortex"><img src="https://img.shields.io/badge/VS%20Code-Extension-007ACC?style=flat&logo=visual-studio-code&logoColor=white" alt="VS Code"></a>
+</p>
 
-- Preserve development context across long breaks.
-- Reconstruct workspace state (branch, open files, terminal intent).
-- Ask natural-language questions about prior work.
-- Apply privacy-first redaction before data leaves your machine.
+**English** | [中文](READMECN.md)
 
-## Monorepo Structure
+</div>
 
-- `secondcortex-vscode/`: VS Code extension (TypeScript)
-- `secondcortex-backend/`: FastAPI backend (Python)
-- `secondcortex-web/`: Next.js web app (TypeScript)
-- `docker-compose.yml`: local container orchestration (backend + frontend)
-- `DEMO_READY.md`: demo playbook
+---
 
-## Core Features
+> **SecondCortex** is an AI-powered developer memory system that captures your coding context, protects sensitive data locally, and helps you resume complex work in seconds. Never lose development context again.
 
-- Workspace Resurrection Engine
-- Live Context Capture with debounce/noise filtering
-- Semantic Firewall for local redaction
-- Cortex as a Service (MCP): query private developer memory from external AI clients
-- Incident Packet generation for contradiction-aware incident response
-- Azure AI Document Intelligence ingestion path for OCR-backed external documents
-- Sidebar Chat with session history and new chat
-- Shadow Graph visualization panel
-- Shadow Graph timeline time-travel with snapshot lookup/restore workflow
-- Decision Archaeology hover (function-level historical reasoning from git + snapshot context)
-- Confidence scoring and disproof checks for incident archaeology flows
-- Retro Git Ingestion (commits, diffs, comments, optional PR context)
-- Testing Sandbox Incident Debug Graph for incident reasoning visibility
-- Activity Lookup fast-path ("what am I working on?" queries from latest snapshot)
-- Secure auth token handling via VS Code SecretStorage
-- Command Palette + CLI-style workflows
+## 🎯 The Problem
 
-## Architecture (High Level)
+You're deep in a complex feature after hours of work. You close your laptop. Days later, you return. The context is gone.
 
-1. VS Code extension captures editor and terminal context.
-2. Semantic Firewall redacts sensitive values locally.
-3. Sanitized snapshots are sent to backend APIs.
-4. Backend retrieval/planning/execution agents process context and queries.
-5. MCP exposes the same memory layer as a tool for external AI assistants.
-6. Results are shown in extension chat and web graph experiences.
+- _"What branch was I on?"_
+- _"What was the git conflict I was debugging?"_
+- _"How did I solve this 3 months ago?"_
+- _"What terminal commands was I running?"_
 
-## Tech Stack
+Without this context, developers lose 30-60 minutes per context switch. With distributed teams and long-running projects, this multiplies quickly.
 
-- Extension: TypeScript, VS Code API
-- Backend: FastAPI, Pydantic, ChromaDB, multi-agent services
-- Frontend: Next.js App Router, React
-- Deployment: Docker, Azure App Service
+**SecondCortex solves this** with:
+- ✅ **Automatic context capture** — Every file, branch, terminal output, and decision is logged
+- ✅ **Privacy-first redaction** — Sensitive data (passwords, keys, SSNs) is scrubbed locally before leaving your machine
+- ✅ **Semantic search** — Ask natural-language questions and get answers from your work history
+- ✅ **Workspace resurrection** — Restore your exact IDE state with a single click
+- ✅ **Decision archaeology** — Understand _why_ code was written, not just _what_ it does
+- ✅ **Team collaboration** — Share snapshots and insights across your development team
 
-## Prerequisites
+---
 
-- Node.js 20+
-- npm 9+
-- Python 3.11+
-- Git
-- Optional: Docker Desktop
+## ✨ Key Features
 
-## Environment Variables
+🧠 **Developer Memory Graph**
+- Automatic capture of code snapshots, git history, terminal commands, and decisions
+- Semantic search across months of context using vector embeddings
+- Privacy-first: sensitive values are redacted locally before backend sync
 
-Backend configuration is loaded from `secondcortex-backend/config.py`.
+🔄 **Workspace Resurrection Engine**
+- Restore your exact IDE state: open files, branch, terminal intent
+- Reconstructed in seconds, not hours
+- One-click "resume" from any prior snapshot
 
-Minimum useful variables:
+🛡️ **Semantic Firewall**
+- AST-based redaction for code secrets (API keys, credentials, PII)
+- Regex pattern matching for payment cards, SSNs, emails (optional)
+- All redaction happens locally—backend never sees raw secrets
 
-```env
-# Task-aware provider routing (global default + optional task overrides)
-LLM_PROVIDER_DEFAULT=azure_openai
-# LLM_PROVIDER_RETRIEVER=azure_openai
-# LLM_PROVIDER_PLANNER=azure_openai
-# LLM_PROVIDER_EXECUTOR=azure_openai
-# LLM_PROVIDER_SIMULATOR=azure_openai
-# LLM_PROVIDER_ARCHAEOLOGY=azure_openai
-# LLM_PROVIDER_EMBEDDINGS=azure_openai
+📊 **AI-Powered Dashboard**
+- Real-time team activity timeline
+- Project evolution tracking
+- Snapshot summaries and evolution insights
+- Git decision archaeology with confidence scoring
 
-# Optional task fallback providers for safe cutover/rollback
-# LLM_FALLBACK_PROVIDER_RETRIEVER=groq
-# LLM_FALLBACK_PROVIDER_PLANNER=groq
-# LLM_FALLBACK_PROVIDER_EXECUTOR=groq
-# LLM_FALLBACK_PROVIDER_SIMULATOR=groq
-# LLM_FALLBACK_PROVIDER_ARCHAEOLOGY=github_models
-# LLM_FALLBACK_PROVIDER_EMBEDDINGS=github_models
+🔍 **Decision Archaeology**
+- Hover over any function to see historical reasoning
+- Linked to original commits, snapshots, and terminal context
+- Understand contradictions and disproof in incident response
 
-# Azure OpenAI v1 (primary)
-AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1/
-AZURE_OPENAI_AUTH_MODE=managed_identity_then_key
-AZURE_OPENAI_CLIENT_ID=<user-assigned-mi-client-id>
-AZURE_OPENAI_API_KEY=<fallback-key>
-AZURE_OPENAI_TOKEN_SCOPE=https://ai.azure.com/.default
+🤖 **Multi-Agent Orchestration**
+- **Retriever Agent**: Decides whether to add/update/delete snapshots
+- **Planner Agent**: Decomposes user queries into semantic searches
+- **Executor Agent**: Synthesizes answers with confidence scoring
+- **Simulator Agent**: Pre-flight safety analysis for workspace resurrection
 
-# Per-capability deployment names
-AZURE_OPENAI_DEPLOYMENT_RETRIEVER=gpt-4o-retriever
-AZURE_OPENAI_DEPLOYMENT_PLANNER=gpt-4o-planner
-AZURE_OPENAI_DEPLOYMENT_EXECUTOR=gpt-4o-executor
-AZURE_OPENAI_DEPLOYMENT_SIMULATOR=gpt-4o-simulator
-AZURE_OPENAI_DEPLOYMENT_ARCHAEOLOGY=gpt-4o-archaeology
-AZURE_OPENAI_DEPLOYMENT_EMBEDDINGS=text-embedding-3-small
+🔌 **Model Context Protocol (MCP)**
+- Expose your private developer memory to external AI clients
+- Custom `search_memory()` tool for integration with other AI systems
+- Secure API key management and rate limiting
 
-# GitHub Models (rollback option)
-GITHUB_TOKEN=your_token
-GITHUB_MODELS_ENDPOINT=https://models.inference.ai.azure.com
-GITHUB_MODELS_CHAT_MODEL=gpt-4o
-GITHUB_MODELS_EMBEDDING_MODEL=text-embedding-3-small
+📱 **Multi-Channel Integration**
+- Chat directly in VS Code sidebar
+- Web dashboard for team insights
+- CLI tools for automation and scripting
+- MCP server for external agent access
 
-# Groq (rollback option)
-GROQ_API_KEY=your_key
-GROQ_MODEL=llama-3.1-8b-instant
-GROQ_ENDPOINT=https://api.groq.com/openai/v1
+🌍 **Cross-Platform Support**
+- VS Code extension (Windows, macOS, Linux)
+- Self-hosted FastAPI backend
+- Docker deployment with docker-compose
+- Fully privacy-preserving (all sensitive data stays on-device)
 
-# Provider-aware rate limits
-LLM_RATE_LIMIT_DEFAULT_PER_MINUTE=60
-LLM_RATE_LIMIT_AZURE_OPENAI_PER_MINUTE=120
-LLM_RATE_LIMIT_GITHUB_MODELS_PER_MINUTE=60
-LLM_RATE_LIMIT_GROQ_PER_MINUTE=12
-LLM_RATE_LIMIT_MAX_RETRIES=2
+---
 
-# JWT
-JWT_SECRET=change_me
+## 🏗️ Architecture
 
-# Azure AI Document Intelligence (optional external document ingestion)
-AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://<resource>.cognitiveservices.azure.com/
-AZURE_DOCUMENT_INTELLIGENCE_KEY=<document-intelligence-key>
-AZURE_DOCUMENT_INTELLIGENCE_MODEL_ID=prebuilt-read
-MCP_EXTERNAL_INGESTION_ENABLED=true
-MCP_EXTERNAL_DOCUMENT_ENABLED=false
+SecondCortex is built as a distributed system with three main layers:
 
-# Storage
-CHROMA_DB_PATH=./chroma_db
+### Layer 1: VS Code Extension (TypeScript)
+- **Event Capture**: Monitors editor events, terminal output, git changes
+- **Debouncer**: Time-gates events to reduce noise (configurable intervals)
+- **Semantic Firewall**: AST-based scrubbing of secrets before leaving your machine
+- **Snapshot Cache**: Queues snapshots for reliable backend delivery
+- **Decision Archaeology**: Hover analysis linking code to historical context
+- **Workspace Resurrector**: Executes commands to restore your prior IDE state
 
-# Server
-HOST=0.0.0.0
-PORT=8000
+### Layer 2: FastAPI Backend (Python)
+- **Auth Layer**: JWT verification + MCP API key management
+- **Retriever Agent**: Decides ADD/UPDATE/DELETE/NOOP on incoming snapshots
+- **Planner Agent**: Interprets user queries and generates search decompositions
+- **Executor Agent**: Synthesizes answers from retrieved context with confidence scoring
+- **Simulator Agent**: Pre-flight safety analysis (git conflicts, risk levels)
+- **Services Layer**: VectorDB, Rate Limiter, LLM Client, Git Ingest, Auth
+
+### Layer 3: Frontend (Next.js + React)
+- **Dashboard**: Team timeline, project evolution, snapshot insights
+- **Shadow Graph**: Interactive visualization of context relationships
+- **Incident Debug Graph**: Three-column view for incident archaeology
+- **Chat Interface**: Real-time conversation with agent
+
+### Storage & Integrations
+- **ChromaDB**: Vector database for semantic search (SQLite backend)
+- **Git API**: Retroactive commit mining and PR ingestion
+- **LLM APIs**: OpenAI (embeddings), Groq (fast inference)
+- **Auth DB**: User sessions, MCP keys, chat history
+
+```
+┌─────────────────────────────┐
+│   VS Code Extension         │
+│  (Context Capture)          │
+├─────────────────────────────┤
+│   Semantic Firewall         │
+│  (Local Redaction)          │
+├─────────────────────────────┤
+│                             │
+└──────────────┬──────────────┘
+               │ HTTPS + JWT
+               ↓
+┌────────────────────────────────┐
+│    FastAPI Backend             │
+│  (Multi-Agent Orchestration)   │
+├────────────────────────────────┤
+│  Retriever | Planner |         │
+│  Executor  | Simulator         │
+├────────────────────────────────┤
+└──────────────┬─────────────────┘
+               │
+        ┌──────┴──────┐
+        ↓             ↓
+    ChromaDB      Git API
+    (Search)      (History)
 ```
 
-Frontend variable:
+---
 
-```env
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+## 🚀 Quick Start
+
+### Prerequisites
+- **Node.js** 18+ (for VS Code extension and web frontend)
+- **Python** 3.11-3.13 (for backend and CodexCortex local MCP work)
+- **Docker** & **Docker Compose** (recommended for backend)
+- **VS Code** 1.80+ (for extension)
+
+### Optional: CodexCortex Native MCP Setup
+
+This fork includes `CodexCortex/` as a plug-and-play in-repo package for Codex-native MCP access to SecondCortex memory.
+
+```powershell
+.\CodexCortex\scripts\setup_env.cmd
+.\CodexCortex\scripts\run_tests.cmd
 ```
 
-Extension runtime settings are exposed in VS Code under `secondcortex.*` configuration.
+The setup script rebuilds the repository `.venv` on Python 3.13, installs the backend requirements, installs `CodexCortex` in editable mode, and exposes the `codexcortex-mcp` console command for Codex MCP config. See [CodexCortex Native Setup](docs/codexcortex-native-setup.md) for teammate workflow and repo alignment details.
 
-## Quick Start (Local, No Docker)
-
-### 1. Start backend
+### Option 1: Docker Compose (Recommended)
 
 ```bash
+# Clone the repository
+git clone https://github.com/SuhaanSyed/SecondCortex.git
+cd SecondCortex
+
+# Start backend + frontend + database
+docker compose up -d
+
+# Backend available at http://localhost:8000
+# Frontend available at http://localhost:3000
+# MCP server runs on localhost:5000
+```
+
+See [Docker Setup](docs/docker.md) for advanced configuration.
+
+### Option 2: Local Development
+
+#### Backend Setup
+```bash
 cd secondcortex-backend
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-# source .venv/bin/activate
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Start backend (defaults to http://localhost:8000)
 python main.py
 ```
 
-Backend runs on `http://localhost:8000` by default.
-
-### 2. Start frontend
-
+#### Frontend Setup
 ```bash
 cd secondcortex-web
+
+# Install dependencies
 npm install
+
+# Start development server (defaults to http://localhost:3000)
 npm run dev
 ```
 
-Frontend runs on `http://localhost:3001`.
+#### VS Code Extension Setup
+```bash
+cd secondcortex-vscode
 
-### 3. Run extension in VS Code
+# Install dependencies
+npm install
+
+# Build extension
+npm run build
+
+# For development with debugging:
+# Open in VS Code, press F5 to start debug instance
+```
+
+### Configure the Extension
+
+1. **Install VS Code Extension**
+   - From Marketplace: search for "SecondCortex"
+   - Or load locally: `code --install-extension ./secondcortex-vscode`
+
+2. **Authenticate Backend**
+   - Open VS Code Command Palette (`Ctrl+Shift+P`)
+   - Run: `SecondCortex: Authenticate`
+   - Enter backend URL (e.g., `http://localhost:8000`)
+   - Provide your API token or create new user account
+
+3. **Configure Redaction Rules** (Optional)
+   - Open settings: `Ctrl+,` → Search "SecondCortex"
+   - Configure sensitivity levels (High/Medium/Low)
+   - Add custom regex patterns for sensitive values
+
+4. **Start Capturing**
+   - Open a project folder in VS Code
+   - Extension automatically starts capturing context
+   - View captured snapshots in the SecondCortex sidebar
+
+---
+
+## 📊 Usage Examples
+
+### Example 1: Resume a Complex Feature After a Break
+
+**Scenario**: You were debugging a database indexing issue. After two days away, you return.
+
+```
+👤 Me: "What was I working on with the database?"
+
+🤖 SecondCortex:
+  ✅ Found 8 snapshots from last session
+  📋 Context:
+     - Branch: fix/db-indexing-performance
+     - Terminal: $ psql -c "CREATE INDEX idx_user_projects..."
+     - Files open: schema.sql, migration.py, test_perf.py
+     - Error: "Index creation timeout on 5M rows"
+  
+  💡 Decision: In snapshot 2026-03-15 14:23, you discovered compound indices 
+     reduced query time from 850ms to 12ms. Solution: Use CONCURRENTLY flag.
+
+[Click: Restore Workspace] → Opens exact files, branch, terminal history
+```
+
+### Example 2: Search Your Work History
+
+```
+👤 Me: "Show me all incidents where we crashed the API gateway"
+
+🤖 SecondCortex (via Planner + Executor agents):
+  🔍 Searching: "api gateway crash", "gateway error", "503 timeout"
+  📍 Found 3 related snapshots:
+     1. 2026-02-12: Rate limiter misconfiguration → Fixed with circuit breaker
+     2. 2026-02-28: Memory leak in event loop → Fixed with pooling
+     3. 2026-03-10: DNS cache TTL too high → Fixed with shorter TTL
+  
+  📊 Pattern: All three involved external service timeout handling
+  💡 Recommendation: Add integration tests for service degradation scenarios
+```
+
+### Example 3: Team Collaboration
+
+Alice opens the SecondCortex dashboard and sees:
+
+```
+📊 Team Timeline (Last 7 days)
+├─ Alice: Fixed OAuth token refresh logic
+│  └─ Branch: fix/oauth-refresh → 3 snapshots → 4 files changed
+├─ Bob: Added webhook retry mechanism
+│  └─ Branch: feat/webhook-retry → 8 snapshots → 2 files changed
+├─ Charlie: Refactored search service
+│  └─ Branch: refactor/search-service → 12 snapshots → 5 files changed
+└─ David: Deployed schema migration v3.2
+   └─ Branch: release/3.2 → Production snapshot
+
+📈 Project Evolution:
+   Week 1: 120 commits, 45 files changed, 3 hotfixes
+   Week 2: 156 commits, 62 files changed, 1 hotfix (improving!)
+   
+🎯 Next: Click any snapshot to see full context, diffs, and decisions
+```
+
+---
+
+## 🔒 Privacy & Security
+
+### How SecondCortex Protects Your Data
+
+**Data Flow:**
+1. ✅ VS Code Extension captures context locally
+2. ✅ **Semantic Firewall scrubs secrets** (API keys, credentials, PII)
+3. ✅ Safe snapshot sent to backend over HTTPS
+4. ✅ Backend stores encrypted data (ChromaDB)
+5. ✅ Vectors are searchable but non-reversible
+
+**What Gets Redacted:**
+- AWS keys, GitHub tokens, database passwords
+- Payment card numbers (PCI compliance)
+- Social Security Numbers, email addresses (optional)
+- Custom patterns (user-defined regex)
+
+**What You Control:**
+- Choose backend location (self-hosted or cloud)
+- Define redaction sensitivity (High/Medium/Low)
+- Add custom sensitive patterns
+- Export or delete your data anytime
+- Fine-grained access controls per team member
+
+**OpenAI Model Privacy:**
+- Embeddings use `text-embedding-3-small` from OpenAI
+- Text is sent to OpenAI only for embedding (never for model inference)
+- Configure to use local embeddings or alternative providers
+
+See [Security Documentation](docs/security.md) for detailed threat model and compliance (SOC2, HIPAA considerations).
+
+---
+
+## 📦 Installation Options
+
+### VS Code Marketplace (Easiest)
+
+1. Open VS Code → Extensions Marketplace
+2. Search for "SecondCortex"
+3. Click Install
+4. Reload VS Code
+
+### Manual Installation
+
+```bash
+# Clone and build locally
+git clone https://github.com/SuhaanSyed/SecondCortex.git
+cd secondcortex-vscode
+npm install
+npm run build
+
+# Install locally
+code --install-extension ./dist/secondcortex-*.vsix
+```
+
+### Development Mode
 
 ```bash
 cd secondcortex-vscode
 npm install
-npm run compile
+
+# Opens new VS Code window with extension running
+npm run watch  # Auto-rebuild on changes
+# or press F5 in VS Code to launch debug instance
 ```
 
-Then open this folder in VS Code and press `F5` to launch an Extension Development Host.
+---
 
-## Quick Start (Docker)
+## ⚙️ Configuration
 
-From repository root:
+### Backend Configuration
+
+**Environment Variables:**
+```bash
+# Backend
+Backend_URL=http://localhost:8000
+BACKEND_JWT_SECRET=your-secret-key
+BACKEND_DB_PATH=./chroma_db
+
+# LLM Providers
+GROQ_API_KEY=your-groq-api-key
+OPENAI_API_KEY=your-openai-api-key
+
+# Feature Flags
+MCP_EXTERNAL_INGESTION_ENABLED=true
+MCP_EXTERNAL_DOCUMENT_ENABLED=false
+```
+
+See [Configuration Guide](docs/configuration.md) for full reference.
+
+### Extension Configuration
+
+Open VS Code Settings (`Ctrl+,`), search "SecondCortex":
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `secondcortex.backend.url` | `http://localhost:8000` | Backend API URL |
+| `secondcortex.redaction.level` | `medium` | Sensitivity: `high`, `medium`, `low` |
+| `secondcortex.capture.interval` | `5000` | Snapshot frequency (ms) |
+| `secondcortex.git.enabled` | `true` | Enable git history ingestion |
+| `secondcortex.mcp.port` | `5000` | MCP server port |
+
+---
+
+## 🔌 MCP Server Integration
+
+SecondCortex exposes a **Model Context Protocol (MCP)** server that allows external AI clients to query your private developer memory.
+
+### Enable MCP Server
 
 ```bash
-docker compose up --build
+# In VS Code settings, enable:
+secondcortex.mcp.enabled: true
+secondcortex.mcp.port: 5000
 ```
 
-Services:
-- Backend: `http://localhost:8000`
-- Frontend: `http://localhost:3000`
+### Query from External Agents
 
-Stop:
+```python
+import asyncio
+from mcp.client.session import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def query_memory():
+    async with stdio_client(
+        StdioServerParameters(
+            command="npm",
+            args=["exec", "secondcortex-mcp-server"]
+        )
+    ) as (read, write):
+        session = ClientSession(read, write)
+        
+        # Query your memory
+        result = await session.call_tool(
+            "search_memory",
+            {
+                "query": "database indexing performance",
+                "limit": 5
+            }
+        )
+        
+        print(result)
+
+asyncio.run(query_memory())
+```
+
+See [MCP Integration Guide](docs/mcp-integration.md) for details.
+
+---
+
+## 🛠️ Development
+
+### Project Structure
+
+```
+.
+├── secondcortex-vscode/        # VS Code extension (TypeScript)
+│   ├── src/
+│   │   ├── extension.ts        # Extension entry point
+│   │   ├── capture/            # Event capture & debouncing
+│   │   ├── firewall/           # Semantic redaction
+│   │   ├── sidebar/            # Chat & UI
+│   │   └── services/           # Backend client, auth
+│   └── package.json
+│
+├── secondcortex-backend/       # FastAPI backend (Python)
+│   ├── main.py                 # Entry point
+│   ├── agents/                 # Retriever, Planner, Executor, Simulator
+│   ├── services/               # VectorDB, LLM, Auth
+│   ├── models/                 # Data models & schemas
+│   ├── database/               # ChromaDB integration
+│   └── requirements.txt
+│
+├── secondcortex-web/           # Next.js frontend (TypeScript)
+│   ├── src/
+│   │   ├── app/                # Next.js app router
+│   │   ├── components/         # React components
+│   │   │   ├── Dashboard.tsx   # Main dashboard
+│   │   │   ├── Timeline.tsx    # Snapshot timeline
+│   │   │   └── Chat.tsx        # Chat interface
+│   │   └── lib/                # Utilities, API clients
+│   └── package.json
+│
+├── CodexCortex/                # Codex-native MCP adapter package
+│   ├── codexcortex_mcp.py      # Thin Codex tool surface over SecondCortex memory
+│   ├── scripts/                # Local setup/test helpers
+│   └── tests/                  # Adapter contract tests
+│
+├── docker-compose.yml           # Local orchestration
+└── docs/                        # Documentation
+    ├── docker.md
+    ├── configuration.md
+    ├── security.md
+    ├── mcp-integration.md
+    └── architecture.md
+```
+
+### Contributing
+
+1. **Fork** the repository
+2. **Create** a feature branch: `git checkout -b feat/your-feature`
+3. **Make** your changes and add tests
+4. **Run** linting: `npm run lint` (extension/web), `pylint` (backend)
+5. **Commit** with clear messages: `git commit -m "feat: add new feature"`
+6. **Push** and create a **Pull Request**
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+### Local Development Workflow
 
 ```bash
-docker compose down
+# Terminal 1: Backend
+cd secondcortex-backend
+python main.py
+
+# Terminal 2: Frontend
+cd secondcortex-web
+npm run dev  # Runs on http://localhost:3000
+
+# Terminal 3: VS Code Extension
+cd secondcortex-vscode
+npm run watch
+# Then press F5 in VS Code to launch debug instance
 ```
 
-## Important API Endpoints
-
-- `POST /api/v1/auth/signup`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/mcp-key`
-- `GET /api/v1/auth/mcp-key`
-- `POST /api/v1/auth/mcp-keys`
-- `GET /api/v1/auth/mcp-keys`
-- `DELETE /api/v1/auth/mcp-keys/{key_id}`
-- `POST /api/v1/snapshot`
-- `POST /api/v1/ingest/git`
-- `POST /api/v1/query`
-- `POST /api/v1/resurrect`
-- `POST /api/v1/decision-archaeology`
-- `POST /api/v1/incident/packet`
-- `POST /api/v1/ingest/document`
-- `GET /api/v1/events`
-- `GET /api/v1/snapshots/timeline`
-- `GET /api/v1/snapshots/{snapshot_id}`
-- `GET /api/v1/chat/history`
-- `GET /api/v1/chat/sessions`
-- `POST /api/v1/chat/sessions`
-- `DELETE /api/v1/chat/history`
-- `SSE /mcp` (MCP endpoint mount)
-- `GET /health`
-
-## MCP and Cortex as a Service
-
-SecondCortex includes an MCP server (`secondcortex-backend/mcp_server.py`) mounted by the backend at `/mcp`.
-
-What this enables:
-- External AI clients can use your historical IDE context as a live tool.
-- Cortex Memory is queryable with semantic search across snapshots.
-- Access is user-scoped through MCP API key authentication.
-
-Current MCP tool:
-- `search_memory(query, api_key, top_k=5)`: returns relevant snapshots with summary, branch, file path, entities, and code context excerpts.
-
-Hierarchical MCP tools:
-- `get_codebase_overview(api_key?, max_items=8)`: ultra-compressed recent codebase orientation.
-- `get_domain_context(domain, api_key?, top_k?)`: domain-level decisions and active streams.
-- `get_function_context(file, function, api_key?, top_k?)`: function/file decision history and code context.
-- `get_raw_snapshots(query, max_tokens=1000, api_key?, top_k?)`: budgeted raw snapshot retrieval for deeper agent control.
-- `get_related_context(anchor, relationship_types?, depth=1, max_tokens=1000, api_key?, top_k?)`: graph-style related context traversal (`co-changed`, `co-debugged`, `causally-linked`) with bounded depth and budget.
-- `get_context_for_task_type(domain, task_type, project_id?, max_tokens?, api_key?, top_k?)`: task-scoped summaries (`debugging`, `code-review`, `feature-addition`, `incident-response`) with freshness metadata and cache-aware fallback synthesis.
-- `ingest_slack_thread(channel, thread_ts, messages, domain, project_id?, api_key?)`: feature-flagged Slack ingestion path using normalized provenance metadata and reconciliation before persistence.
-- `ingest_document(filename, content_base64, domain, source_uri?, api_key?, project_id?)`: feature-flagged OCR extraction and external document memory ingestion via Azure Document Intelligence.
-- `get_mcp_metrics(api_key?)`: runtime observability summary (request counters, auth/rate-limit rejections, cache stats, graph fan-out, per-tool latency p50/p95/p99).
-- `get_mcp_readiness(api_key?)`: readiness status for auth principal resolution, vector storage availability, and connector flags.
-- `get_incident_packet(question, api_key?, project_id?, time_window?)`: contradiction-aware incident packet with hypotheses, evidence graph, disproof checks, recovery options, and confidence.
-
-Lineage/confidence behavior:
-- MCP retrieval output now includes source lineage fields (`source_type`, `source_uri`) and `confidence_score` when available.
-- External-source context is merged into the same semantic retrieval surface as code snapshots for cross-source reasoning.
-
-MCP client auth options:
-- Legacy per-call key argument: pass `api_key` directly to `search_memory`.
-- Recommended client integration: set `SECONDCORTEX_MCP_API_KEY` in the MCP host process (Claude Desktop/Cursor/Copilot bridge) so keys are not pasted into every chat.
-
-This is the foundation for using SecondCortex not just as an extension, but as a developer memory service across tooling.
-
-## VS Code Extension Packaging and Publishing
-
-From `secondcortex-vscode/`:
+### Testing
 
 ```bash
-npm run compile
-npm run vsix
+# Backend
+cd secondcortex-backend
+pytest tests/ -v
+
+# Extension & Web
+cd secondcortex-vscode
+npm test
+
+cd secondcortex-web
+npm test
 ```
 
-Generated artifact example:
-- `secondcortex-0.1.7.vsix`
+---
 
-Recommended release flow:
-1. Bump version in `secondcortex-vscode/package.json`.
-2. Build a new VSIX.
-3. Upload VSIX from Marketplace publisher portal.
-4. Verify listing update (README/icon can take a few minutes to propagate).
+## 📚 Documentation
 
-## Privacy and Security
+| Topic | Location |
+|-------|----------|
+| Full Architecture | [docs/architecture.md](docs/architecture.md) |
+| Docker & Deployment | [docs/docker.md](docs/docker.md) |
+| Configuration Reference | [docs/configuration.md](docs/configuration.md) |
+| Security & Privacy | [docs/security.md](docs/security.md) |
+| MCP Integration | [docs/mcp-integration.md](docs/mcp-integration.md) |
+| CodexCortex Native Setup | [docs/codexcortex-native-setup.md](docs/codexcortex-native-setup.md) |
+| API Reference | [docs/api.md](docs/api.md) |
+| Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
-- Semantic Firewall performs local redaction before sync.
-- Authentication tokens are stored in VS Code SecretStorage.
-- Avoid committing secrets or PATs; keep them in ignored env files or terminal session variables.
+---
 
-## Development Notes
+## 🤝 Community
 
-- Extension activation is currently broad (`*`), so bundle/optimize before larger scale distribution.
-- VSIX currently includes many dependency files; tune `.vscodeignore` and bundle to reduce package size.
+**Have questions?** Open an issue or discussion on [GitHub](https://github.com/SuhaanSyed/SecondCortex/issues).
 
+**Want to contribute?** Read [CONTRIBUTING.md](CONTRIBUTING.md) and submit a PR!
 
-## Additional Docs
+**Report Security Issues?** Email: `security@secondcortex.dev` (responsible disclosure)
 
-- Extension README: `secondcortex-vscode/README.md`
-- Demo guide: `DEMO_READY.md`
-- Azure OpenAI cutover runbook: `secondcortex-backend/AZURE_OPENAI_CUTOVER_RUNBOOK.md`
+---
 
-## License
+## 📊 Status
 
-MIT (see `secondcortex-vscode/LICENSE`).
+- ✅ **v0.3.1** Released — HAX transparency, Incident packets, Document ingestion
+- 🔄 **In Development** — Team collaboration features, Mobile support, Analytics
+- 🚀 **Roadmap** — End-to-end encryption, GDPR compliance, Offline mode
+
+See [ROADMAP.md](ROADMAP.md) for detailed plans.
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+
+**Built with ❤️ by the SecondCortex team**
+
+[⭐ Star on GitHub](https://github.com/SuhaanSyed/SecondCortex) · [📧 Email us](mailto:team@secondcortex.dev) · [🐦 Follow us](https://twitter.com/secondcortex)
+
+</div>

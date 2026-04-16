@@ -11,6 +11,7 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN mkdir -p public
 
 # Build-time env: backend URL only (API key is entered by user at login, never baked)
 ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8000

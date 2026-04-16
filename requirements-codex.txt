@@ -1,0 +1,11 @@
+# Shared local development environment for Codex + SecondCortex MCP work.
+# Run from the repository root:
+#   .\CodexCortex\scripts\setup_env.cmd
+
+-r ./secondcortex-backend/requirements.txt
+-e ./CodexCortex
+
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+ruff>=0.2.0
+pywin32>=306; sys_platform == "win32"

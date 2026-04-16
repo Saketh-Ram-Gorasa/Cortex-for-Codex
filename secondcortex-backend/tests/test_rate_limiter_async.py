@@ -16,7 +16,7 @@ def test_rate_limited_call_supports_async_callable():
         rate_limited_call(
             async_func,
             "x",
-            provider="azure_openai",
+            provider="openai",
             task="planner",
             max_retries=0,
         )
@@ -34,7 +34,7 @@ def test_rate_limited_call_still_supports_sync_callable():
         rate_limited_call(
             sync_func,
             2,
-            provider="azure_openai",
+            provider="openai",
             task="planner",
             max_retries=0,
         )
@@ -54,7 +54,7 @@ def test_rate_limited_call_awaits_sync_callable_returning_coroutine():
         rate_limited_call(
             wrapper,
             "wrapped",
-            provider="azure_openai",
+            provider="openai",
             task="retriever",
             max_retries=0,
         )

@@ -2,7 +2,7 @@
   "name": "secondcortex",
   "displayName": "SecondCortex",
   "description": "Your AI-Powered Second Brain for Development Context — tracks IDE activity, enforces a Semantic Firewall, and enables Workspace Resurrection.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "secondcortex-labs",
   "repository": {
     "type": "git",
@@ -25,7 +25,8 @@
     "security"
   ],
   "activationEvents": [
-    "*"
+    "*",
+    "onUri"
   ],
   "main": "./out/extension.js",
   "bin": {
@@ -78,6 +79,10 @@
       {
         "command": "secondcortex.selectProject",
         "title": "SecondCortex: Select Project"
+      },
+      {
+        "command": "secondcortex.setCaptureLevel",
+        "title": "SecondCortex: Set Capture Level"
       }
     ],
     "configuration": {
@@ -107,6 +112,17 @@
           "type": "boolean",
           "default": true,
           "description": "Enable or disable automatic context capture."
+        },
+        "secondcortex.enableSecondCortexMcp": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SecondCortex MCP in demo mode. When enabled, chat returns deterministic MCP mock responses."
+        },
+        "secondcortex.captureLevel": {
+          "type": "string",
+          "enum": ["base", "medium", "full", "ultra"],
+          "default": "medium",
+          "description": "Snapshot fidelity level. Base captures metadata only, medium captures intent signals, full captures active file content, and ultra captures bounded multi-file context."
         }
       }
     }

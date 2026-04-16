@@ -1,12 +1,11 @@
 """
 Task-aware LLM routing and client factory utilities.
 
-Supports:
-  - Azure OpenAI v1 (managed identity / key / managed_identity_then_key)
-  - GitHub Models
-  - Groq
+Current behavior:
+  - Primary provider: OpenAI API
+  - Optional fallbacks: GitHub Models, Groq
 
-Also provides emergency per-task fallback routing for safe cutovers.
+The provider is configurable per task via env vars.
 """
 
 from __future__ import annotations
@@ -22,15 +21,10 @@ from openai import AsyncOpenAI, OpenAI
 from config import settings
 from services.rate_limiter import rate_limited_call
 
-try:
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-except Exception:  # pragma: no cover - exercised in environments without azure-identity installed
-    DefaultAzureCredential = None
-    get_bearer_token_provider = None
 
 logger = logging.getLogger("secondcortex.llm")
 
-VALID_PROVIDERS = {"azure_openai", "github_models", "groq"}
+VALID_PROVIDERS = {"openai", "github_models", "groq"}
 CHAT_TASKS = {"retriever", "planner", "executor", "simulator", "archaeology"}
 EMBEDDING_TASK = "embeddings"
 ALL_TASKS = tuple(sorted(CHAT_TASKS | {EMBEDDING_TASK}))
@@ -65,10 +59,10 @@ def get_llm_metrics_snapshot() -> dict[str, int]:
 
 def _normalize_provider(value: str | None) -> str:
     normalized = (value or "").strip().lower()
-    if normalized in {"azure", "azureopenai"}:
-        return "azure_openai"
     if normalized in {"github", "githubmodel"}:
         return "github_models"
+    if normalized in {"azure_openai", "azure-openai", "azureopenai"}:
+        return "openai"
     return normalized
 
 
@@ -77,33 +71,6 @@ def _normalize_task(task: str) -> str:
     if normalized not in ALL_TASKS:
         raise ValueError(f"Unsupported LLM task '{task}'. Expected one of: {', '.join(ALL_TASKS)}")
     return normalized
-
-
-def _normalize_azure_base_url(raw: str) -> str:
-    value = (raw or "").strip().rstrip("/")
-    if not value:
-        return ""
-
-    # Legacy endpoint input: https://<resource>.openai.azure.com/
-    if value.endswith(".openai.azure.com"):
-        return f"{value}/openai/v1/"
-
-    # Legacy style with /openai but missing /v1
-    if value.endswith("/openai"):
-        return f"{value}/v1/"
-
-    # Already v1 style
-    if value.endswith("/openai/v1"):
-        return f"{value}/"
-
-    if value.endswith("/openai/v1/"):
-        return value
-
-    # Last-resort compatibility for users passing raw host or partial path.
-    if "openai.azure.com" in value and "/openai/v1" not in value:
-        return f"{value}/openai/v1/"
-
-    return value if value.endswith("/") else f"{value}/"
 
 
 def _get_task_provider(task: str) -> str:
@@ -131,60 +98,26 @@ def _get_task_fallback_provider(task: str) -> str | None:
     return fallback
 
 
-def _get_azure_task_deployment(task: str) -> str:
-    task = _normalize_task(task)
-
-    # Task-specific override takes precedence.
-    task_value = (getattr(settings, f"azure_openai_deployment_{task}", "") or "").strip()
-    if task_value:
-        return task_value
-
-    # Fallbacks by capability type.
-    if task == EMBEDDING_TASK:
-        return (settings.azure_openai_deployment_embeddings or settings.azure_openai_embedding_deployment or "").strip()
-
-    return (settings.azure_openai_deployment or "").strip()
+def _normalize_openai_base_url(raw: str) -> str:
+    value = (raw or "").strip()
+    return value[:-1] if value.endswith("/") else value
 
 
 def _get_task_model(provider: str, task: str) -> str:
     task = _normalize_task(task)
     provider = _normalize_provider(provider)
 
-    if provider == "azure_openai":
-        return _get_azure_task_deployment(task)
+    if provider == "openai":
+        if task == EMBEDDING_TASK:
+            return (settings.openai_embedding_model or "").strip()
+        return (settings.openai_chat_model or "").strip()
 
     if provider == "groq":
         return (settings.groq_model or "").strip()
 
-    # github_models
     if task == EMBEDDING_TASK:
         return (settings.github_models_embedding_model or "").strip()
     return (settings.github_models_chat_model or "").strip()
-
-
-def _is_azure_auth_mode(value: str) -> bool:
-    return value in {"managed_identity", "key", "managed_identity_then_key"}
-
-
-def _get_azure_auth_mode() -> str:
-    mode = (settings.azure_openai_auth_mode or "").strip().lower()
-    if not _is_azure_auth_mode(mode):
-        raise ValueError(
-            f"Invalid AZURE_OPENAI_AUTH_MODE='{settings.azure_openai_auth_mode}'. "
-            "Expected one of: managed_identity, key, managed_identity_then_key"
-        )
-    return mode
-
-
-def _create_azure_token_provider():
-    if DefaultAzureCredential is None or get_bearer_token_provider is None:
-        raise RuntimeError("azure-identity is required for managed identity auth but is not installed.")
-
-    kwargs = {}
-    if settings.azure_openai_client_id:
-        kwargs["managed_identity_client_id"] = settings.azure_openai_client_id
-    credential = DefaultAzureCredential(**kwargs)
-    return get_bearer_token_provider(credential, settings.azure_openai_token_scope)
 
 
 def _get_cache_key(provider: str, async_mode: bool, auth_variant: str = "default") -> tuple[str, str]:
@@ -219,32 +152,26 @@ def _build_client(
     client_cls = AsyncOpenAI if async_mode else OpenAI
 
     if provider == "github_models":
-        return client_cls(
-            base_url=settings.github_models_endpoint,
-            api_key=settings.github_token,
-        )
+        kwargs = {"base_url": settings.github_models_endpoint, "api_key": settings.github_token}
+        return client_cls(**kwargs)
 
     if provider == "groq":
-        return client_cls(
-            base_url=settings.groq_endpoint,
-            api_key=settings.groq_api_key,
-        )
+        kwargs = {"base_url": settings.groq_endpoint, "api_key": settings.groq_api_key}
+        return client_cls(**kwargs)
 
-    if provider != "azure_openai":
+    if provider != "openai":
         raise ValueError(f"Unsupported provider '{provider}'")
 
-    base_url = _normalize_azure_base_url(settings.azure_openai_base_url)
-    mode = _get_azure_auth_mode()
+    base_url = _normalize_openai_base_url(settings.openai_api_base_url)
+    api_key = settings.openai_api_key
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is required for provider 'openai'")
 
-    if auth_variant == "key":
-        return client_cls(base_url=base_url, api_key=settings.azure_openai_api_key)
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
 
-    if mode == "key":
-        return client_cls(base_url=base_url, api_key=settings.azure_openai_api_key)
-
-    # managed_identity OR managed_identity_then_key use token provider as primary.
-    token_provider = _create_azure_token_provider()
-    return client_cls(base_url=base_url, api_key=token_provider)
+    return client_cls(**kwargs)
 
 
 def resolve_route(task: str) -> RouteSelection:
@@ -253,75 +180,19 @@ def resolve_route(task: str) -> RouteSelection:
     fallback_provider = _get_task_fallback_provider(task)
     model = _get_task_model(provider, task)
     fallback_model = _get_task_model(fallback_provider, task) if fallback_provider else None
-    auth_mode = _get_azure_auth_mode() if provider == "azure_openai" else None
     return RouteSelection(
         task=task,
         provider=provider,
         fallback_provider=fallback_provider,
         model=model,
         fallback_model=fallback_model,
-        auth_mode=auth_mode,
+        auth_mode=None,
     )
-
-
-def _looks_like_auth_error(exc: Exception) -> bool:
-    text = str(exc).lower()
-    auth_markers = (
-        "401",
-        "403",
-        "unauthorized",
-        "forbidden",
-        "authentication",
-        "token",
-        "credential",
-        "aadsts",
-        "managed identity",
-    )
-    return any(marker in text for marker in auth_markers)
 
 
 def _looks_like_rate_limit_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "429" in text or "rate limit" in text or "resource_exhausted" in text
-
-
-def _looks_like_not_found_error(exc: Exception) -> bool:
-    text = str(exc).lower()
-    not_found_markers = (
-        "404",
-        "resource not found",
-        "deploymentnotfound",
-        "not_found",
-    )
-    return any(marker in text for marker in not_found_markers)
-
-
-def _get_azure_alternate_models(task: str, primary_model: str) -> list[str]:
-    task = _normalize_task(task)
-    primary = (primary_model or "").strip()
-
-    candidates: list[str] = []
-
-    if task == EMBEDDING_TASK:
-        candidates.extend(
-            [
-                (settings.azure_openai_deployment_embeddings or "").strip(),
-                (settings.azure_openai_embedding_deployment or "").strip(),
-            ]
-        )
-    else:
-        candidates.extend(
-            [
-                (settings.azure_openai_deployment or "").strip(),
-                "gpt-4o",
-            ]
-        )
-
-    deduped: list[str] = []
-    for model in candidates:
-        if model and model != primary and model not in deduped:
-            deduped.append(model)
-    return deduped
 
 
 async def _call_with_provider(
@@ -356,8 +227,8 @@ async def _call_with_provider(
     raise ValueError(f"Unsupported endpoint '{endpoint}'")
 
 
-def _has_azure_key() -> bool:
-    return bool((settings.azure_openai_api_key or "").strip())
+def _has_openai_key() -> bool:
+    return bool((settings.openai_api_key or "").strip())
 
 
 async def _call_with_fallbacks(
@@ -400,72 +271,15 @@ async def _call_with_fallbacks(
             primary_exc,
         )
 
-        # Azure model/deployment fallback: retry on 404 with alternate configured deployment names.
-        if route.provider == "azure_openai" and _looks_like_not_found_error(primary_exc):
-            alternate_models = _get_azure_alternate_models(route.task, route.model)
-            for alternate_model in alternate_models:
-                try:
-                    fallback_used = True
-                    _metric_inc("fallback_used", task=route.task, provider=route.provider)
-                    response = await _call_with_provider(
-                        provider=route.provider,
-                        task=route.task,
-                        endpoint=endpoint,
-                        model=alternate_model,
-                        payload=payload,
-                    )
-                    duration_ms = (time.perf_counter() - start) * 1000.0
-                    logger.warning(
-                        "LLM call recovered via Azure deployment fallback task=%s primary_model=%s fallback_model=%s latency_ms=%.1f",
-                        route.task,
-                        route.model,
-                        alternate_model,
-                        duration_ms,
-                    )
-                    return response
-                except Exception as alt_exc:
-                    logger.warning(
-                        "LLM Azure deployment fallback failed task=%s fallback_model=%s error=%s",
-                        route.task,
-                        alternate_model,
-                        alt_exc,
-                    )
+        # OpenAI key safety net: if openai key is missing for primary openai route,
+        # still allow task-specific fallback provider to run.
+        if route.provider == "openai" and not _has_openai_key():
+            logger.warning(
+                "LLM provider 'openai' was configured but no OPENAI_API_KEY is present. "
+                "Attempting fallback provider."
+            )
 
-        # Azure auth fallback: managed identity -> key for auth failures.
-        if (
-            route.provider == "azure_openai"
-            and route.auth_mode == "managed_identity_then_key"
-            and _has_azure_key()
-            and _looks_like_auth_error(primary_exc)
-        ):
-            try:
-                fallback_used = True
-                _metric_inc("fallback_used", task=route.task, provider=route.provider)
-                response = await _call_with_provider(
-                    provider=route.provider,
-                    task=route.task,
-                    endpoint=endpoint,
-                    model=route.model,
-                    payload=payload,
-                    auth_variant="key",
-                )
-                duration_ms = (time.perf_counter() - start) * 1000.0
-                logger.warning(
-                    "LLM call recovered via Azure key fallback task=%s model=%s latency_ms=%.1f",
-                    route.task,
-                    route.model,
-                    duration_ms,
-                )
-                return response
-            except Exception as key_exc:
-                logger.error(
-                    "LLM Azure key fallback failed task=%s model=%s error=%s",
-                    route.task,
-                    route.model,
-                    key_exc,
-                )
-
-        # Provider fallback (task-specific emergency rollback path).
+        # Optional provider fallback (task-specific emergency path)
         if route.fallback_provider:
             try:
                 fallback_used = True
@@ -557,33 +371,11 @@ def _validate_provider_config(provider: str, task: str, model: str, prefix: str 
     provider = _normalize_provider(provider)
 
     if not model:
-        issues.append(f"{prefix} task={task}: no model/deployment configured for provider '{provider}'")
+        issues.append(f"{prefix} task={task}: no model configured for provider '{provider}'")
 
-    if provider == "azure_openai":
-        base_url = _normalize_azure_base_url(settings.azure_openai_base_url)
-        if not base_url:
-            issues.append(f"{prefix} task={task}: AZURE_OPENAI_BASE_URL or AZURE_OPENAI_ENDPOINT is required")
-
-        mode = (settings.azure_openai_auth_mode or "").strip().lower()
-        if not _is_azure_auth_mode(mode):
-            issues.append(
-                f"{prefix} task={task}: invalid AZURE_OPENAI_AUTH_MODE='{settings.azure_openai_auth_mode}'"
-            )
-        elif mode == "key":
-            if not _has_azure_key():
-                issues.append(f"{prefix} task={task}: AZURE_OPENAI_API_KEY is required for auth mode 'key'")
-        elif mode == "managed_identity":
-            if DefaultAzureCredential is None or get_bearer_token_provider is None:
-                issues.append(f"{prefix} task={task}: azure-identity package is required for managed identity mode")
-        elif mode == "managed_identity_then_key":
-            if DefaultAzureCredential is None or get_bearer_token_provider is None:
-                issues.append(
-                    f"{prefix} task={task}: azure-identity package is required for managed_identity_then_key mode"
-                )
-            if not _has_azure_key():
-                issues.append(
-                    f"{prefix} task={task}: AZURE_OPENAI_API_KEY should be set for managed_identity_then_key fallback"
-                )
+    if provider == "openai":
+        if not (settings.openai_api_key or "").strip():
+            issues.append(f"{prefix} task={task}: OPENAI_API_KEY is required for provider 'openai'")
 
     elif provider == "groq":
         if not (settings.groq_api_key or "").strip():

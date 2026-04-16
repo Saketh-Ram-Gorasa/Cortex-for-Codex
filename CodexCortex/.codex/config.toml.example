@@ -1,0 +1,8 @@
+[mcp_servers.codexcortex]
+command = "<repo-root>\\.venv\\Scripts\\codexcortex-mcp.exe"
+args = []
+enabled = true
+
+[mcp_servers.codexcortex.env]
+SECONDCORTEX_BACKEND_PATH = "<repo-root>\\secondcortex-backend"
+SECONDCORTEX_MCP_API_KEY = "${SECONDCORTEX_MCP_API_KEY}"

@@ -74,12 +74,50 @@ export interface IncidentPacketResponse {
     disproofChecks: string[];
 }
 
+export interface HumanInteractionDecision {
+    actionId: string;
+    commandType: string;
+    decision: 'allow' | 'ask' | 'deny';
+    risk: 'low' | 'medium' | 'high' | 'critical';
+    reason: string;
+    commandPreview: string;
+}
+
+export interface HumanInteractionEnvelope {
+    mode: 'allow' | 'prompt' | 'read_only';
+    requiresConfirmation: boolean;
+    prompt: string;
+    decisions: HumanInteractionDecision[];
+    allowedActions: string[];
+    deniedActions: string[];
+}
+
 export interface DocumentIngestResult {
     status: string;
     recordId: string;
     sourceType: string;
     confidence: number;
     entities: string[];
+}
+
+export interface GitIngestPayload {
+    repoPath: string;
+    projectId?: string;
+    maxCommits: number;
+    maxPullRequests: number;
+    includePullRequests: boolean;
+}
+
+export interface GitIngestResult {
+    status: string;
+    repo: string;
+    branch: string;
+    ingestedCount: number;
+    commitCount: number;
+    prCount: number;
+    commentCount: number;
+    skippedCount: number;
+    warnings: string[];
 }
 
 /**
@@ -97,6 +135,25 @@ export class BackendClient {
     /** Attach the AuthService instance (set after construction). */
     setAuthService(auth: AuthService): void {
         this.auth = auth;
+    }
+
+    private resolveBaseUrl(baseUrlOverride?: string): string {
+        return String(baseUrlOverride || this.baseUrl || '').trim().replace(/\/$/, '');
+    }
+
+    private extractErrorDetail(text: string, fallback: string): string {
+        if (!text.trim()) {
+            return fallback;
+        }
+        try {
+            const parsed = JSON.parse(text) as { detail?: string };
+            if (parsed.detail) {
+                return parsed.detail;
+            }
+        } catch {
+            return text;
+        }
+        return text;
     }
 
     /** Build common headers including the JWT Bearer token. */
@@ -135,6 +192,7 @@ export class BackendClient {
      */
     async sendSnapshot(payload: Record<string, unknown>): Promise<boolean> {
         try {
+            this.output.appendLine('[Agent:Executing] Sending snapshot to backend...');
             const res = await fetch(`${this.baseUrl}/api/v1/snapshot`, {
                 method: 'POST',
                 headers: await this.getHeaders(),
@@ -150,6 +208,7 @@ export class BackendClient {
                 this.output.appendLine(`[BackendClient] Snapshot upload details: ${text}`);
                 return false;
             }
+            this.output.appendLine('[Agent:Executing] Snapshot uploaded successfully.');
             this.output.appendLine('[BackendClient] Snapshot uploaded successfully.');
             return true;
         } catch (err) {
@@ -176,6 +235,17 @@ export class BackendClient {
             gitBranch: null,
             projectId: projectId || null,
             terminalCommands: [],
+            captureLevel: 'medium',
+            captureMeta: {
+                source: 'manual_note',
+                includedArtifacts: {
+                    metadata: true,
+                    comments: false,
+                    functionSignatures: false,
+                    activeFileContent: true,
+                    openFileContext: false,
+                },
+            },
             functionContext: {
                 source: 'manual_note',
                 noteEntities,
@@ -219,6 +289,41 @@ export class BackendClient {
         }
     }
 
+    async ingestGitHistory(payload: GitIngestPayload, baseUrlOverride?: string): Promise<GitIngestResult> {
+        const baseUrl = this.resolveBaseUrl(baseUrlOverride);
+
+        try {
+            const res = await fetch(`${baseUrl}/api/v1/ingest/git`, {
+                method: 'POST',
+                headers: await this.getHeaders(),
+                body: JSON.stringify(payload),
+            });
+
+            if (res.status === 401) {
+                await this.handle401();
+                throw new Error('SecondCortex session expired. Please log in again.');
+            }
+
+            const text = await res.text().catch(() => '');
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Git ingest failed: ${res.status} ${res.statusText}`);
+                this.output.appendLine(`[BackendClient] Git ingest details: ${text || 'No response body'}`);
+                throw new Error(this.extractErrorDetail(text, `Git ingest failed (${res.status})`));
+            }
+
+            try {
+                return JSON.parse(text) as GitIngestResult;
+            } catch {
+                throw new Error('Git ingest returned an invalid response.');
+            }
+        } catch (err) {
+            if (err instanceof Error) {
+                throw err;
+            }
+            throw new Error(`Network error running git ingest: ${err}`);
+        }
+    }
+
     private extractNoteEntities(note: string): string[] {
         const hashtags = note.match(/#[a-zA-Z0-9_-]+/g) || [];
         const titleCaseWords = note.match(/\b[A-Z][a-zA-Z0-9_]{2,}\b/g) || [];
@@ -229,9 +334,10 @@ export class BackendClient {
         return Array.from(new Set(merged)).slice(0, 12);
     }
 
-    async listProjects(): Promise<ProjectSummary[]> {
+    async listProjects(baseUrlOverride?: string): Promise<ProjectSummary[]> {
+        const baseUrl = this.resolveBaseUrl(baseUrlOverride);
         try {
-            const res = await fetch(`${this.baseUrl}/api/v1/projects`, {
+            const res = await fetch(`${baseUrl}/api/v1/projects`, {
                 method: 'GET',
                 headers: await this.getHeaders(),
             });
@@ -251,9 +357,10 @@ export class BackendClient {
         }
     }
 
-    async resolveProject(request: ProjectResolveRequest): Promise<ProjectResolveResponse | null> {
+    async resolveProject(request: ProjectResolveRequest, baseUrlOverride?: string): Promise<ProjectResolveResponse | null> {
+        const baseUrl = this.resolveBaseUrl(baseUrlOverride);
         try {
-            const res = await fetch(`${this.baseUrl}/api/v1/projects/resolve`, {
+            const res = await fetch(`${baseUrl}/api/v1/projects/resolve`, {
                 method: 'POST',
                 headers: await this.getHeaders(),
                 body: JSON.stringify(request),
@@ -276,7 +383,7 @@ export class BackendClient {
     /**
      * Ask a natural-language question to the Planner agent.
      */
-    async askQuestion(question: string, sessionId?: string): Promise<{ summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }> } | null> {
+    async askQuestion(question: string, sessionId?: string): Promise<{ summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }>; interaction?: HumanInteractionEnvelope | null } | null> {
         try {
             let url = `${this.baseUrl}/api/v1/query`;
             if (sessionId) {
@@ -306,7 +413,7 @@ export class BackendClient {
                 } catch { /* not JSON */ }
                 return { summary: errorMsg, commands: [], _error: true } as any;
             }
-            return (await res.json()) as { summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }> };
+            return (await res.json()) as { summary: string; commands?: unknown[]; sources?: Array<{ type?: string; id?: string; uri?: string }>; interaction?: HumanInteractionEnvelope | null };
         } catch (err: any) {
             this.output.appendLine(`[BackendClient] Network error querying backend: ${err.message || err}`);
             if (err.stack) {
@@ -520,6 +627,8 @@ export class BackendClient {
         shadow_graph: string;
         active_symbol?: string;
         function_signatures?: string[];
+        capture_level?: 'base' | 'medium' | 'full' | 'ultra';
+        capture_meta?: Record<string, unknown>;
     } | null> {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/snapshots/${encodeURIComponent(snapshotId)}`, {
