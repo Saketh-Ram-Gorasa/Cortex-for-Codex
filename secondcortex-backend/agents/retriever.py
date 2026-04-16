@@ -2,7 +2,7 @@
 Agent 1: The Retriever (Memory Manager & Graph Extractor)
 
 Runs asynchronously in the background after receiving an IDE snapshot.
-Uses GPT-4o (via GitHub Models or Azure OpenAI) to perform the 4-Operation Routing:
+Uses GPT-4o (via OpenAI, with GitHub Models or Groq as alternates) to perform the 4-Operation Routing:
   ADD    — New task detected
   UPDATE — Continuing an existing task
   DELETE — Rabbit hole / abandoned work

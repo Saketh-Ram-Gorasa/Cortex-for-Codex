@@ -11,11 +11,11 @@ def test_task_chat_completion_passes_payload(monkeypatch):
     def fake_resolve_route(task: str):
         return llm_client.RouteSelection(
             task=task,
-            provider="azure_openai",
+            provider="openai",
             fallback_provider=None,
             model="chat-model",
             fallback_model=None,
-            auth_mode="managed_identity_then_key",
+            auth_mode=None,
         )
 
     async def fake_call_with_fallbacks(*, route, endpoint, payload):
@@ -50,11 +50,11 @@ def test_task_embedding_create_passes_payload(monkeypatch):
     def fake_resolve_route(task: str):
         return llm_client.RouteSelection(
             task=task,
-            provider="azure_openai",
+            provider="openai",
             fallback_provider=None,
             model="embed-model",
             fallback_model=None,
-            auth_mode="managed_identity_then_key",
+            auth_mode=None,
         )
 
     async def fake_call_with_fallbacks(*, route, endpoint, payload):

@@ -71,8 +71,8 @@ def _get_calls_per_minute_for_provider(provider: str) -> int:
     normalized = (provider or "").strip().lower()
     if normalized == "groq":
         return max(1, settings.llm_rate_limit_groq_per_minute)
-    if normalized == "azure_openai":
-        return max(1, settings.llm_rate_limit_azure_openai_per_minute)
+    if normalized == "openai":
+        return max(1, settings.llm_rate_limit_openai_per_minute)
     if normalized == "github_models":
         return max(1, settings.llm_rate_limit_github_models_per_minute)
     return max(1, settings.llm_rate_limit_default_per_minute)
